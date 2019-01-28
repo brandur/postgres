@@ -26,6 +26,9 @@
 
 /* A few constants for the width in bits of certain values in inet/cidr
  * abbreviated keys. */
+/* TODO: Should I bother with these constants? They're good in that they're
+ * used multiple times, but they arguably *reduce* clarity instead of
+ * contributing to it. */
 #define ABBREV_BITS_INET_FAMILY 1
 #if SIZEOF_DATUM == 8
 #define ABBREV_BITS_INET4_NETMASK_SIZE 6
