@@ -700,14 +700,9 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * However, only some of the bits may have made it into the fixed
 		 * sized datum, so take the smallest number between bits in the subnet
 		 * and bits left in the datum.
-		 *
-		 * TODO: Is there a MIN macro in Postgres?
 		 */
-		datum_subnet_size = ip_maxbits(authoritative) - ip_bits(authoritative);
-		if (datum_subnet_size > datum_size_left)
-		{
-			datum_subnet_size = datum_size_left;
-		}
+		datum_subnet_size = Min(ip_maxbits(authoritative) - ip_bits(authoritative),
+								datum_size_left);
 
 		if (datum_subnet_size > 0)
 		{
