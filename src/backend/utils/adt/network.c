@@ -24,6 +24,12 @@
 #include "utils/inet.h"
 #include "utils/sortsupport.h"
 
+/* A few constants for the width in bits of certain values that we place into
+ * an abbreviated key for IPv4 addresses on 64-bit systems. */
+#if SIZEOF_DATUM == 8
+#define ABBREV_INET4_BITS_NETMASK_SIZE 6
+#define ABBREV_INET4_BITS_SUBNET 25
+#endif
 
 static int32 network_cmp_internal(inet *a1, inet *a2);
 static bool addressOK(unsigned char *a, int bits, int family);
@@ -641,8 +647,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	Datum		ipaddr_int,
 				netmask_int,
 				subnet_int;
-	char		size_left,
-				subnet_size;
+	char		datum_size_left,
+				datum_subnet_size;
 
 	/* TODO: Is this enough, or should the possibility of a third value be */
 	/* handled on branches below? */
@@ -682,11 +688,11 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 
 	netmask_int = ipaddr_int;
 	subnet_int = (Datum) 0;
-	subnet_size = 0;
+	datum_subnet_size = 0;
 
 	/* Extract subnet bits from ipaddr_ints if there are some present. */
-	size_left = SIZEOF_DATUM * BITS_PER_BYTE - ip_bits(authoritative);
-	if (size_left > 0)
+	datum_size_left = SIZEOF_DATUM * BITS_PER_BYTE - ip_bits(authoritative);
+	if (datum_size_left > 0)
 	{
 		/*
 		 * Number of bits in subnet. e.g. An IPv4 that's /24 is 32 - 24 = 8.
@@ -697,20 +703,20 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 *
 		 * TODO: Is there a MIN macro in Postgres?
 		 */
-		subnet_size = ip_maxbits(authoritative) - ip_bits(authoritative);
-		if (subnet_size > size_left)
+		datum_subnet_size = ip_maxbits(authoritative) - ip_bits(authoritative);
+		if (datum_subnet_size > datum_size_left)
 		{
-			subnet_size = size_left;
+			datum_subnet_size = datum_size_left;
 		}
 
-		if (subnet_size > 0)
+		if (datum_subnet_size > 0)
 		{
 			/*
 			 * The shift creates a power of two like `0010 0000`, and
 			 * subtracting one always creates a bitmask like `0001 1111`.
 			 */
-			Assert(subnet_size < SIZEOF_DATUM * BITS_PER_BYTE);
-			Datum		subnet_bitmask = (((Datum) 1) << subnet_size) - 1;
+			Assert(datum_subnet_size < SIZEOF_DATUM * BITS_PER_BYTE);
+			Datum		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
 
 			/*
 			 * AND the bitmask with the IP address' integer to truncate it
@@ -745,7 +751,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * size, and most significant 25 subnet bits (see diagram above for
 		 * more detail).
 		 */
-		Datum netmask_size_and_subnet = (Datum) 0;
+		Datum		netmask_size_and_subnet = (Datum) 0;
 
 		/*
 		 * an IPv4 netmask has a maximum value of 32 which takes 6 bits to
@@ -753,26 +759,29 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 */
 		Datum		netmask_size = (Datum) ip_bits(authoritative);
 
-		Assert(netmask_size <= 32);
-		netmask_size_and_subnet |= netmask_size << 25;
+		Assert(netmask_size <= ip_maxbits(authoritative));
+		netmask_size_and_subnet |= netmask_size << ABBREV_INET4_BITS_SUBNET;
 
 		/*
 		 * if we have more than 25 subnet bits of information, shift it down
 		 * to the available size
 		 */
-		if (subnet_size > 25)
+		if (datum_subnet_size > ABBREV_INET4_BITS_SUBNET)
 		{
-			subnet_int >>= subnet_size - 25;
+			subnet_int >>= datum_subnet_size - ABBREV_INET4_BITS_SUBNET;
 		}
 		netmask_size_and_subnet |= subnet_int;
 
-		/* There's a fair bit of scary bit manipulaion in this function. This
+		/*
+		 * There's a fair bit of scary bit manipulaion in this function. This
 		 * is an extra check that verifies that that nothing outside of the
-		 * least signifiant bits 0-31 are set. */
+		 * least signifiant bits 0-31 are set.
+		 */
 		Assert(netmask_size_and_subnet | 0xffffffff != 0xffffffff);
 
 		/* 31 = 6 bits netmask size + 25 subnet bits */
-		res |= (netmask_int << 31) | netmask_size_and_subnet;
+		res |= (netmask_int << ABBREV_INET4_BITS_NETMASK_SIZE + ABBREV_INET4_BITS_SUBNET)
+			| netmask_size_and_subnet;
 
 	}
 #else							/* SIZEOF_DATUM != 8 */
