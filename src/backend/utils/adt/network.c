@@ -729,16 +729,14 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	}
 
 #if SIZEOF_DATUM == 8
+
 	if (ip_family(authoritative) == PGSQL_AF_INET6)
 	{
-
 		/*
 		 * IPv6 on 64-bit architecture: keep the most significant 63 netmasked
 		 * bits.
 		 */
-
 		res |= netmask_int >> ABBREV_BITS_INET_FAMILY;
-
 	}
 	else
 	{
@@ -775,18 +773,18 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 */
 		Assert(netmask_size_and_subnet | 0xffffffff != 0xffffffff);
 
-		/* 31 = 6 bits netmask size + 25 subnet bits */
+		/* shift left 31 bits: 6 bits netmask size + 25 subnet bits */
 		res |= (netmask_int << ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET)
 			| netmask_size_and_subnet;
 
 	}
+
 #else							/* SIZEOF_DATUM != 8 */
 
 	/*
 	 * 32-bit architecture: keep the most significant 31 netmasked bits in
 	 * both IPv4 and IPv6.
 	 */
-
 	res |= netmask_int >> ABBREV_BITS_INET_FAMILY;
 
 #endif
