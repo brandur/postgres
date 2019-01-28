@@ -24,11 +24,12 @@
 #include "utils/inet.h"
 #include "utils/sortsupport.h"
 
-/* A few constants for the width in bits of certain values that we place into
- * an abbreviated key for IPv4 addresses on 64-bit systems. */
+/* A few constants for the width in bits of certain values in inet/cidr
+ * abbreviated keys. */
+#define ABBREV_BITS_INET_FAMILY 1
 #if SIZEOF_DATUM == 8
-#define ABBREV_INET4_BITS_NETMASK_SIZE 6
-#define ABBREV_INET4_BITS_SUBNET 25
+#define ABBREV_BITS_INET4_NETMASK_SIZE 6
+#define ABBREV_BITS_INET4_SUBNET 25
 #endif
 
 static int32 network_cmp_internal(inet *a1, inet *a2);
@@ -661,7 +662,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		res = (Datum) 1;
 
 		/* Shift the 1 over to the datum's most significant bit. */
-		res <<= SIZEOF_DATUM * BITS_PER_BYTE - 1;
+		res <<= SIZEOF_DATUM * BITS_PER_BYTE - ABBREV_BITS_INET_FAMILY;
 	}
 
 	/*
@@ -736,7 +737,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * bits.
 		 */
 
-		res |= netmask_int >> 1;
+		res |= netmask_int >> ABBREV_BITS_INET_FAMILY;
 
 	}
 	else
@@ -755,15 +756,15 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		Datum		netmask_size = (Datum) ip_bits(authoritative);
 
 		Assert(netmask_size <= ip_maxbits(authoritative));
-		netmask_size_and_subnet |= netmask_size << ABBREV_INET4_BITS_SUBNET;
+		netmask_size_and_subnet |= netmask_size << ABBREV_BITS_INET4_SUBNET;
 
 		/*
 		 * if we have more than 25 subnet bits of information, shift it down
 		 * to the available size
 		 */
-		if (datum_subnet_size > ABBREV_INET4_BITS_SUBNET)
+		if (datum_subnet_size > ABBREV_BITS_INET4_SUBNET)
 		{
-			subnet_int >>= datum_subnet_size - ABBREV_INET4_BITS_SUBNET;
+			subnet_int >>= datum_subnet_size - ABBREV_BITS_INET4_SUBNET;
 		}
 		netmask_size_and_subnet |= subnet_int;
 
@@ -775,7 +776,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		Assert(netmask_size_and_subnet | 0xffffffff != 0xffffffff);
 
 		/* 31 = 6 bits netmask size + 25 subnet bits */
-		res |= (netmask_int << ABBREV_INET4_BITS_NETMASK_SIZE + ABBREV_INET4_BITS_SUBNET)
+		res |= (netmask_int << ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET)
 			| netmask_size_and_subnet;
 
 	}
@@ -786,7 +787,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	 * both IPv4 and IPv6.
 	 */
 
-	res |= netmask_int >> 1;
+	res |= netmask_int >> ABBREV_BITS_INET_FAMILY;
 
 #endif
 
