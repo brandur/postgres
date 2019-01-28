@@ -740,15 +740,12 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	}
 	else
 	{
-
 		/*
 		 * IPv4 on 64-bit architecture: keep all 32 netmasked bits, netmask
 		 * size, and most significant 25 subnet bits (see diagram above for
 		 * more detail).
 		 */
-
-		/* 31 = 6 bits netmask size + 25 subnet bits */
-		res |= netmask_int << 31;
+		Datum netmask_size_and_subnet = (Datum) 0;
 
 		/*
 		 * an IPv4 netmask has a maximum value of 32 which takes 6 bits to
@@ -757,7 +754,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		Datum		netmask_size = (Datum) ip_bits(authoritative);
 
 		Assert(netmask_size <= 32);
-		res |= netmask_size << 25;
+		netmask_size_and_subnet |= netmask_size << 25;
 
 		/*
 		 * if we have more than 25 subnet bits of information, shift it down
@@ -767,7 +764,15 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		{
 			subnet_int >>= subnet_size - 25;
 		}
-		res |= subnet_int;
+		netmask_size_and_subnet |= subnet_int;
+
+		/* There's a fair bit of scary bit manipulaion in this function. This
+		 * is an extra check that verifies that that nothing outside of the
+		 * least signifiant bits 0-31 are set. */
+		Assert(netmask_size_and_subnet | 0xffffffff != 0xffffffff);
+
+		/* 31 = 6 bits netmask size + 25 subnet bits */
+		res |= (netmask_int << 31) | netmask_size_and_subnet;
 
 	}
 #else							/* SIZEOF_DATUM != 8 */
