@@ -572,11 +572,12 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * IPv4 addresses have a maximum of 32 bits compared to IPv6's 64 bits, so in
  * IPv6 each part may be larger.
  *
- * inet/cdir types compare using these sorting rules. If any rule is a tie, the
- * algorithm drops through to the next to break it:
+ * inet/cdir types compare using these sorting rules. If inequality is detected
+ * at any step, comparison is done. If any rule is a tie, the algorithm drops
+ * through to the next to break it:
  *
  *     1. IPv4 always appears before IPv6.
- *     2. Netmasked bits are compared.
+ *     2. Just bits in the netmask are compared.
  *     3. Netmask size is compared.
  *     4. All bits are compared (but by this point we know that the netmasked
  *        bits are equal, so we're in effect only comparing subnet bits).
