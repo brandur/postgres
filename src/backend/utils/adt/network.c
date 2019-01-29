@@ -655,8 +655,10 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	char		datum_size_left,
 				datum_subnet_size;
 
-	/* If another IP family is ever added, we'll need to redesign the key
-	 * abbreviation strategy. */
+	/*
+	 * If another IP family is ever added, we'll need to redesign the key
+	 * abbreviation strategy.
+	 */
 	Assert(ip_family(authoritative) == PGSQL_AF_INET ||
 		   ip_family(authoritative) == PGSQL_AF_INET6);
 
@@ -668,9 +670,9 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	}
 
 	/*
-	 * For IPv6, create an integer from either the first 4 or 8 bytes of the IP
-	 * (depending on whether we're on a 32 or 64-bit machine). For IPv4, always
-	 * use all 4 bytes.
+	 * For IPv6, create an integer from either the first 4 or 8 bytes of the
+	 * IP (depending on whether we're on a 32 or 64-bit machine). For IPv4,
+	 * always use all 4 bytes.
 	 *
 	 * We're consuming an array of char, so make sure to byteswap on little
 	 * endian systems (an inet's IP array emulates big endian in that the
@@ -680,9 +682,12 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	ipaddr_int = DatumBigEndianToNative(ipaddr_int);
 
 #if SIZEOF_DATUM == 8
-	/* In the case of IPv4 (4 bytes) on a 64-bit machine (8 bytes) we ingested
+
+	/*
+	 * In the case of IPv4 (4 bytes) on a 64-bit machine (8 bytes) we ingested
 	 * an extra 4 zeroed bytes in the most significant positions. Shift them
-	 * off to get the integer back to its appropriate value. */
+	 * off to get the integer back to its appropriate value.
+	 */
 	if (ip_family(authoritative) == PGSQL_AF_INET)
 	{
 		ipaddr_int >>= (SIZEOF_DATUM * BITS_PER_BYTE - ip_maxbits(authoritative));
@@ -781,8 +786,9 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		/*
 		 * Shift left 31 bits: 6 bits netmask size + 25 subnet bits.
 		 *
-		 * And assert the opposite as above: no bits should be set in the least
-		 * significant 31 positions where we store netmask size and subnet.
+		 * And assert the opposite as above: no bits should be set in the
+		 * least significant 31 positions where we store netmask size and
+		 * subnet.
 		 */
 		netmask_shifted = netmask_int << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
 		Assert((netmask_shifted & ~((Datum) PG_UINT32_MAX >> 1)) == netmask_shifted);
@@ -793,8 +799,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 #else							/* SIZEOF_DATUM != 8 */
 
 	/*
-	 * 32-bit machine: keep the most significant 31 netmasked bits in both IPv4
-	 * and IPv6.
+	 * 32-bit machine: keep the most significant 31 netmasked bits in both
+	 * IPv4 and IPv6.
 	 */
 	res |= netmask_int >> ABBREV_BITS_INET_FAMILY;
 
