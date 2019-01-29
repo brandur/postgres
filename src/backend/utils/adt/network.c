@@ -771,9 +771,9 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * is an extra check that verifies that that nothing outside of the
 		 * least signifiant 31 bits is set.
 		 *
-		 * 0x7fffffff = 31 bits of 1s
+		 * (PG_UINT32_MAX >> 1) = 31 bits of 1s
 		 */
-		Assert((netmask_size_and_subnet | 0x7fffffff) == 0x7fffffff);
+		Assert((netmask_size_and_subnet | (PG_UINT32_MAX >> 1)) == (PG_UINT32_MAX >> 1));
 
 		/*
 		 * Shift left 31 bits: 6 bits netmask size + 25 subnet bits.
@@ -782,7 +782,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * significant 31 positions where we store netmask size and subnet.
 		 */
 		netmask_shifted = netmask_int << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
-		Assert((netmask_shifted & ~0x7fffffff) == netmask_shifted);
+		Assert((netmask_shifted & ~(PG_UINT32_MAX >> 1)) == netmask_shifted);
 
 		res |= netmask_shifted | netmask_size_and_subnet;
 	}
