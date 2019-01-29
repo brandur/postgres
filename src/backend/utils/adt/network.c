@@ -652,7 +652,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	Datum		ipaddr_int,
 				netmask_int,
 				subnet_int;
-	char		datum_size_left,
+	uint8		datum_size_left,
 				datum_subnet_size;
 
 	/*
