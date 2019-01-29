@@ -749,7 +749,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 */
 
 		Datum		netmask_shifted;
-		Datum		netmask_size_and_subnet = (Datum) 0;
+		Datum		netmask_size_and_subnet = 0;
 
 		/*
 		 * an IPv4 netmask has a maximum value of 32 which takes 6 bits to
