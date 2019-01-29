@@ -711,8 +711,9 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		if (datum_subnet_size > 0)
 		{
 			/*
-			 * The shift creates a power of two like `0010 0000`, and
-			 * subtracting one always creates a bitmask like `0001 1111`.
+			 * This shift creates a power of two like `0010 0000`, and
+			 * subtracts one to create a bitmask for an IP's subnet bits like
+			 * `0001 1111`.
 			 */
 			Assert(datum_subnet_size < SIZEOF_DATUM * BITS_PER_BYTE);
 			Datum		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
@@ -743,6 +744,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	}
 	else
 	{
+		Datum netmask_shifted;
+
 		/*
 		 * IPv4 on 64-bit architecture: keep all 32 netmasked bits, netmask
 		 * size, and most significant 25 subnet bits (see diagram above for
@@ -772,14 +775,23 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		/*
 		 * There's a fair bit of scary bit manipulaion in this function. This
 		 * is an extra check that verifies that that nothing outside of the
-		 * least signifiant bits 0-31 are set.
+		 * least signifiant 31 bits are set.
+		 *
+		 * 0x7fffffff = 31 bits of 1s
 		 */
-		Assert(netmask_size_and_subnet | 0xffffffff != 0xffffffff);
+		Assert((netmask_size_and_subnet | (Datum) 0x7fffffff) == (Datum) 0x7fffffff);
 
-		/* shift left 31 bits: 6 bits netmask size + 25 subnet bits */
-		res |= (netmask_int << ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET)
-			| netmask_size_and_subnet;
+		/*
+		 * Shift left 31 bits: 6 bits netmask size + 25 subnet bits.
+		 *
+		 * And similarly assert the opposite as above: no bits are set in the
+		 * least significant 31 positions where we store netmask size and
+		 * subnet.
+		 */
+		netmask_shifted = netmask_int << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
+		Assert((netmask_shifted & (Datum) 0xffffffff80000000) == netmask_shifted);
 
+		res |= netmask_shifted | netmask_size_and_subnet;
 	}
 
 #else							/* SIZEOF_DATUM != 8 */
