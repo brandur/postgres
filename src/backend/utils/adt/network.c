@@ -779,7 +779,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 *
 		 * 0x7fffffff = 31 bits of 1s
 		 */
-		Assert((netmask_size_and_subnet | (Datum) 0x7fffffff) == (Datum) 0x7fffffff);
+		Assert((netmask_size_and_subnet | 0x7fffffff) == 0x7fffffff);
 
 		/*
 		 * Shift left 31 bits: 6 bits netmask size + 25 subnet bits.
@@ -789,7 +789,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * subnet.
 		 */
 		netmask_shifted = netmask_int << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
-		Assert((netmask_shifted & ~((Datum) 0x7fffffff)) == netmask_shifted);
+		Assert((netmask_shifted & ~0x7fffffff) == netmask_shifted);
 
 		res |= netmask_shifted | netmask_size_and_subnet;
 	}
