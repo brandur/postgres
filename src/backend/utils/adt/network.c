@@ -605,8 +605,8 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * all equal, the system will have to fall back to non-abbreviated comparison.
  *
  * +----------+---------------------+
- * | 1 bit IP |   31 bits netmask   |     (up to 1 bit
- * |  family  |     (truncated)     |   netmask omitted)
+ * | 1 bit IP |         up to       |     (up to 1 bit
+ * |  family  |    31 bits netmask  |   netmask omitted)
  * +----------+---------------------+
  *
  * 64-bit machine:
@@ -621,8 +621,8 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * to save trips to the heap.
  *
  * +----------+-----------------------+--------------+--------------------+
- * | 1 bit IP |    32 bits netmask    |    6 bits    |   25 bits subnet   |
- * |  family  |        (full)         | netmask size |    (truncated)     |
+ * | 1 bit IP |    32 bits netmask    |    6 bits    |        up to       |
+ * |  family  |                       | netmask size |    25 bits subnet  |
  * +----------+-----------------------+--------------+--------------------+
  *
  * IPv6
@@ -631,15 +631,15 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * 32-bit machine:
  *
  * +----------+---------------------+
- * | 1 bit IP |   31 bits netmask   |    (up to 97 bits
- * |  family  |     (truncated)     |   netmask omitted)
+ * | 1 bit IP |         up to       |    (up to 97 bits
+ * |  family  |    31 bits netmask  |   netmask omitted)
  * +----------+---------------------+
  *
  * 64-bit machine:
  *
  * +----------+---------------------------------+
- * | 1 bit IP |         63 bits netmask         |    (up to 65 bits
- * |  family  |           (truncated)           |   netmask omitted)
+ * | 1 bit IP |               up to             |    (up to 65 bits
+ * |  family  |          63 bits netmask        |   netmask omitted)
  * +----------+---------------------------------+
  *
  */
