@@ -662,10 +662,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	res = (Datum) 0;
 	if (ip_family(authoritative) == PGSQL_AF_INET6)
 	{
-		res = (Datum) 1;
-
-		/* Shift the 1 over to the datum's most significant bit. */
-		res <<= SIZEOF_DATUM * BITS_PER_BYTE - ABBREV_BITS_INET_FAMILY;
+		/* Shift a 1 over to the datum's most significant bit. */
+		res = ((Datum) 1) << SIZEOF_DATUM * BITS_PER_BYTE - ABBREV_BITS_INET_FAMILY;
 	}
 
 	/*
