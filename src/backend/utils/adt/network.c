@@ -784,7 +784,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * significant 31 positions where we store netmask size and subnet.
 		 */
 		netmask_shifted = netmask_int << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
-		Assert((netmask_shifted & ~(PG_UINT32_MAX >> 1)) == netmask_shifted);
+		Assert((netmask_shifted & ~((Datum) PG_UINT32_MAX >> 1)) == netmask_shifted);
 
 		res |= netmask_shifted | netmask_size_and_subnet;
 	}
