@@ -664,7 +664,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	if (ip_family(authoritative) == PGSQL_AF_INET6)
 	{
 		/* Shift a 1 over to the datum's most significant bit. */
-		res = ((Datum) 1) << SIZEOF_DATUM * BITS_PER_BYTE - ABBREV_BITS_INET_FAMILY;
+		res = ((Datum) 1) << (SIZEOF_DATUM * BITS_PER_BYTE - ABBREV_BITS_INET_FAMILY);
 	}
 
 	/*
@@ -676,18 +676,18 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	 * endian systems (an inet's IP array emulates big endian in that the
 	 * first byte is always the most significant).
 	 */
-	if (ip_family(authoritative) == PGSQL_AF_INET6)
+	ipaddr_int = *((Datum *) ip_addr(authoritative));
+	ipaddr_int = DatumBigEndianToNative(ipaddr_int);
+
+#if SIZEOF_DATUM == 8
+	/* In the case of IPv4 (4 bytes) on a 64-bit machine (8 bytes) we ingested
+	 * an extra 4 zeroed bytes in the most significant positions. Shift them
+	 * off to get the integer back to its appropriate value. */
+	if (ip_family(authoritative) == PGSQL_AF_INET)
 	{
-		ipaddr_int = *((Datum *) ip_addr(authoritative));
-		ipaddr_int = DatumBigEndianToNative(ipaddr_int);
+		ipaddr_int >>= (SIZEOF_DATUM * BITS_PER_BYTE - ip_maxbits(authoritative));
 	}
-	else
-	{
-		uint32		ipaddr_int32 = *((uint32 *) ip_addr(authoritative));
-#ifndef WORDS_BIGENDIAN
-		ipaddr_int = pg_bswap32(ipaddr_int32);
 #endif
-	}
 
 	netmask_int = ipaddr_int;
 	subnet_int = (Datum) 0;
