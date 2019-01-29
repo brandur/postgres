@@ -653,8 +653,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	char		datum_size_left,
 				datum_subnet_size;
 
-	/* TODO: Is this enough, or should the possibility of a third value be */
-	/* handled on branches below? */
+	/* If another IP family is ever added, we'll need to redesign the key
+	 * abbreviation strategy. */
 	Assert(ip_family(authoritative) == PGSQL_AF_INET ||
 		   ip_family(authoritative) == PGSQL_AF_INET6);
 
