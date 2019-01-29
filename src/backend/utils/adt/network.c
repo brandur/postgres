@@ -694,40 +694,37 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 
 	/* Extract subnet bits from ipaddr_ints if there are some present. */
 	datum_size_left = SIZEOF_DATUM * BITS_PER_BYTE - ip_bits(authoritative);
-	if (datum_size_left > 0)
+
+	/*
+	 * Number of bits in subnet. e.g. An IPv4 that's /24 is 32 - 24 = 8.
+	 *
+	 * However, only some of the bits may have made it into the fixed sized
+	 * datum, so take the smallest number between bits in the subnet and bits
+	 * left in the datum.
+	 */
+	datum_subnet_size = Min(ip_maxbits(authoritative) - ip_bits(authoritative),
+							datum_size_left);
+
+	if (datum_subnet_size > 0)
 	{
 		/*
-		 * Number of bits in subnet. e.g. An IPv4 that's /24 is 32 - 24 = 8.
-		 *
-		 * However, only some of the bits may have made it into the fixed
-		 * sized datum, so take the smallest number between bits in the subnet
-		 * and bits left in the datum.
+		 * This shift creates a power of two like `0010 0000`, and subtracts
+		 * one to create a bitmask for an IP's subnet bits like `0001 1111`.
 		 */
-		datum_subnet_size = Min(ip_maxbits(authoritative) - ip_bits(authoritative),
-								datum_size_left);
+		Assert(datum_subnet_size < SIZEOF_DATUM * BITS_PER_BYTE);
+		Datum		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
 
-		if (datum_subnet_size > 0)
-		{
-			/*
-			 * This shift creates a power of two like `0010 0000`, and
-			 * subtracts one to create a bitmask for an IP's subnet bits like
-			 * `0001 1111`.
-			 */
-			Assert(datum_subnet_size < SIZEOF_DATUM * BITS_PER_BYTE);
-			Datum		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
+		/*
+		 * AND the bitmask with the IP address' integer to truncate it down to
+		 * just the bits after the netmask.
+		 */
+		subnet_int = ipaddr_int & subnet_bitmask;
 
-			/*
-			 * AND the bitmask with the IP address' integer to truncate it
-			 * down to just the bits after the netmask.
-			 */
-			subnet_int = ipaddr_int & subnet_bitmask;
-
-			/*
-			 * Integer representation for the netmask is the IP's integer
-			 * minus whatever we calculated for the subnet.
-			 */
-			netmask_int = ipaddr_int - subnet_int;
-		}
+		/*
+		 * Integer representation for the netmask is the IP's integer minus
+		 * whatever we calculated for the subnet.
+		 */
+		netmask_int = ipaddr_int - subnet_int;
 	}
 
 #if SIZEOF_DATUM == 8
