@@ -458,7 +458,7 @@ network_sortsupport(PG_FUNCTION_ARGS)
 }
 
 /*
- * SortSupport "traditional" comparison function. Pulls two inet structs from
+ * SortSupport authoritative comparison function. Pulls two inet structs from
  * the heap and runs a standard comparison on them.
  */
 static int
