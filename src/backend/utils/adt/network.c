@@ -789,7 +789,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * subnet.
 		 */
 		netmask_shifted = netmask_int << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
-		Assert((netmask_shifted & (Datum) 0xffffffff80000000) == netmask_shifted);
+		Assert((netmask_shifted & ~((Datum) 0x7fffffff)) == netmask_shifted);
 
 		res |= netmask_shifted | netmask_size_and_subnet;
 	}
