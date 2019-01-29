@@ -691,7 +691,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	if (ip_family(authoritative) == PGSQL_AF_INET)
 	{
 		ipaddr_int >>= (SIZEOF_DATUM * BITS_PER_BYTE - ip_maxbits(authoritative));
-		Assert(ipaddr_int < PG_UINT32_MAX);
+		Assert(ipaddr_int <= PG_UINT32_MAX);
 	}
 #endif
 
