@@ -742,13 +742,13 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	}
 	else
 	{
-		Datum netmask_shifted;
-
 		/*
 		 * IPv4 on 64-bit architecture: keep all 32 netmasked bits, netmask
 		 * size, and most significant 25 subnet bits (see diagram above for
 		 * more detail).
 		 */
+
+		Datum		netmask_shifted;
 		Datum		netmask_size_and_subnet = (Datum) 0;
 
 		/*
@@ -771,7 +771,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		netmask_size_and_subnet |= subnet_int;
 
 		/*
-		 * There's a fair bit of scary bit manipulaion in this function. This
+		 * There's a fair bit of scary bit manipulation in this function. This
 		 * is an extra check that verifies that that nothing outside of the
 		 * least signifiant 31 bits is set.
 		 *
@@ -782,8 +782,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		/*
 		 * Shift left 31 bits: 6 bits netmask size + 25 subnet bits.
 		 *
-		 * And similarly assert the opposite as above (note the ~ complement on
-		 * the same constant): no bits are set in the least significant 31
+		 * And similarly assert the opposite as above (note the ~ complement
+		 * on the same constant): no bits are set in the least significant 31
 		 * positions where we store netmask size and subnet.
 		 */
 		netmask_shifted = netmask_int << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
