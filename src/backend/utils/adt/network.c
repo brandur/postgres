@@ -587,9 +587,9 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  *
  * In most cases, that means just the most significant of the netmasked bits
  * are retained, but in the case of IPv4 addresses on a 64-bit machine, we can
- * hold almost all relevant information for comparisons to the degree that we'd
- * almost never have to fall back to non-abbreviated comparison. In all cases,
- * there should be enough data present for the abbreviated keys to perform very
+ * hold almost all relevant information for comparisons to the degree that we
+ * almost never have to fall back to authoritative comparison. In all cases,
+ * there will be enough data present for the abbreviated keys to perform very
  * well in all except the very worst of circumstances (and in those, key
  * abbreviation will probably be aborted as we detect low cardinality).
  *
