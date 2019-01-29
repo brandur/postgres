@@ -682,7 +682,6 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	ipaddr_int = DatumBigEndianToNative(ipaddr_int);
 
 #if SIZEOF_DATUM == 8
-
 	/*
 	 * In the case of IPv4 (4 bytes) on a 64-bit machine (8 bytes) we ingested
 	 * an extra 4 zeroed bytes in the most significant positions. Shift them
