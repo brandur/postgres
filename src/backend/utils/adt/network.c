@@ -579,8 +579,9 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  *     1. IPv4 always appears before IPv6.
  *     2. Just bits in the netmask are compared.
  *     3. Netmask size is compared.
- *     4. All bits are compared (but by this point we know that the netmasked
- *        bits are equal, so we're in effect only comparing subnet bits).
+ *     4. All bits are compared (having made it here, we know that both
+ *        netmasked bits and netmask size are equal, so we're in effect only
+ *        comparing subnet bits).
  *
  * When generating abbreviated keys for SortSupport, we pack in as much
  * information as we can while ensuring that when comparing those keys as
