@@ -586,18 +586,17 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * keys as integers, the rules above will be respected.
  *
  * In most cases, that means just the most significant of the netmasked bits
- * are retained, but in the case of IPv4 addresses on 64-bit architecture, we
- * can hold almost all relevant information for comparisons to the degree that
- * we'd almost never have to fall back to non-abbreviated comparison. In all
- * cases, there should be enough data present for the abbreviated keys to
- * perform very well in all except the very worst of circumstances (and in
- * those, key abbreviation will probably be aborted as we detect low
- * cardinality).
+ * are retained, but in the case of IPv4 addresses on a 64-bit machine, we can
+ * hold almost all relevant information for comparisons to the degree that we'd
+ * almost never have to fall back to non-abbreviated comparison. In all cases,
+ * there should be enough data present for the abbreviated keys to perform very
+ * well in all except the very worst of circumstances (and in those, key
+ * abbreviation will probably be aborted as we detect low cardinality).
  *
  * IPv4
  * ----
  *
- * 32-bit architecture:
+ * 32-bit machine:
  *
  * Start with 1 bit for the IP family (IPv4 or IPv6; this bit is present in
  * every case below) followed by all but 1 of the netmasked bits. If those are
@@ -608,7 +607,7 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * |  family  |     (truncated)     |   netmask omitted)
  * +----------+---------------------+
  *
- * 64-bit architecture:
+ * 64-bit machine:
  *
  * The most interesting case: we have space to store all netmasked bits,
  * followed by the netmask size, followed by 25 bits of the subnet. We lay the
@@ -627,14 +626,14 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * IPv6
  * ----
  *
- * 32-bit architecture:
+ * 32-bit machine:
  *
  * +----------+---------------------+
  * | 1 bit IP |   31 bits netmask   |    (up to 97 bits
  * |  family  |     (truncated)     |   netmask omitted)
  * +----------+---------------------+
  *
- * 64-bit architecture:
+ * 64-bit machine:
  *
  * +----------+---------------------------------+
  * | 1 bit IP |         63 bits netmask         |    (up to 65 bits
@@ -667,9 +666,9 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	}
 
 	/*
-	 * For IPv6, create an integer from either the first 4 or 8 bytes of the
-	 * IP (depending on whether we're on 32 or 64-bit architecture). For IPv4,
-	 * always use all 4 bytes.
+	 * For IPv6, create an integer from either the first 4 or 8 bytes of the IP
+	 * (depending on whether we're on a 32 or 64-bit machine). For IPv4, always
+	 * use all 4 bytes.
 	 *
 	 * We're consuming an array of char, so make sure to byteswap on little
 	 * endian systems (an inet's IP array emulates big endian in that the
@@ -732,7 +731,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	if (ip_family(authoritative) == PGSQL_AF_INET6)
 	{
 		/*
-		 * IPv6 on 64-bit architecture: keep the most significant 63 netmasked
+		 * IPv6 on a 64-bit machine: keep the most significant 63 netmasked
 		 * bits.
 		 */
 		res |= netmask_int >> ABBREV_BITS_INET_FAMILY;
@@ -740,9 +739,9 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	else
 	{
 		/*
-		 * IPv4 on 64-bit architecture: keep all 32 netmasked bits, netmask
-		 * size, and most significant 25 subnet bits (see diagram above for
-		 * more detail).
+		 * IPv4 on a 64-bit machine: keep all 32 netmasked bits, netmask size,
+		 * and most significant 25 subnet bits (see diagram above for more
+		 * detail).
 		 */
 
 		Datum		netmask_shifted;
@@ -792,8 +791,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 #else							/* SIZEOF_DATUM != 8 */
 
 	/*
-	 * 32-bit architecture: keep the most significant 31 netmasked bits in
-	 * both IPv4 and IPv6.
+	 * 32-bit machine: keep the most significant 31 netmasked bits in both IPv4
+	 * and IPv6.
 	 */
 	res |= netmask_int >> ABBREV_BITS_INET_FAMILY;
 
@@ -803,8 +802,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 
 	/*
 	 * Cardinality estimation. The estimate uses uint32, so on a 64-bit
-	 * architecture, XOR the two 32-bit halves together to produce slightly
-	 * more entropy.
+	 * machine, XOR the two 32-bit halves together to produce slightly more
+	 * entropy.
 	 */
 	if (uss->estimating)
 	{
