@@ -778,9 +778,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		/*
 		 * Shift left 31 bits: 6 bits netmask size + 25 subnet bits.
 		 *
-		 * And similarly assert the opposite as above (note the ~ complement
-		 * on the same constant): no bits are set in the least significant 31
-		 * positions where we store netmask size and subnet.
+		 * And assert the opposite as above: no bits should be set in the least
+		 * significant 31 positions where we store netmask size and subnet.
 		 */
 		netmask_shifted = netmask_int << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
 		Assert((netmask_shifted & ~0x7fffffff) == netmask_shifted);
