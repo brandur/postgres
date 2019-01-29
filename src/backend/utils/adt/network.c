@@ -582,8 +582,8 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  *        bits are equal, so we're in effect only comparing subnet bits).
  *
  * When generating abbreviated keys for SortSupport, we pack in as much
- * information as we have remove for that will ensure that when comparing those
- * keys as integers, the rules above will be respected.
+ * information as we can while ensuring that when comparing those keys as
+ * integers, the rules above will be respected.
  *
  * In most cases, that means just the most significant of the netmasked bits
  * are retained, but in the case of IPv4 addresses on a 64-bit machine, we can
