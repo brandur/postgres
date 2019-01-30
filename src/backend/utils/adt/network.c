@@ -651,6 +651,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	Datum		res;
 	Datum		ipaddr_int,
 				netmask_int,
+				subnet_bitmask,
 				subnet_int;
 	uint8		datum_size_left,
 				datum_subnet_size;
@@ -709,16 +710,24 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	 */
 	datum_subnet_size = Min(ip_maxbits(authoritative) - ip_bits(authoritative),
 							datum_size_left);
+	Assert(datum_subnet_size <= SIZEOF_DATUM * BITS_PER_BYTE);
+	
+	/* we may have ended up with < 0 for a large netmask */
+	datum_subnet_size = Max(0, datum_subnet_size);
 
-	/*
-	 * This shift creates a power of two like `0010 0000`, and subtracts
-	 * one to create a bitmask for an IP's subnet bits like `0001 1111`.
-	 *
-	 * Note that `datum_subnet_mask` may be <= 0, in which case we'll generate
-	 * a 0 bitmask and `subnet_int` will also come out as 0.
-	 */
-	Assert(datum_subnet_size < SIZEOF_DATUM * BITS_PER_BYTE);
-	Datum		subnet_bitmask = (((Datum) 1) << Max(0, datum_subnet_size)) - 1;
+	if (datum_subnet_size == SIZEOF_DATUM * BITS_PER_BYTE) {
+		/* `/0` where the subnet is the entirety of the datum */
+		subnet_bitmask = PG_UINT32_MAX;
+	} else {
+		/*
+		 * This shift creates a power of two like `0010 0000`, and subtracts
+		 * one to create a bitmask for an IP's subnet bits like `0001 1111`.
+		 *
+		 * Note that `datum_subnet_mask` may be == 0, in which case we'll generate
+		 * a 0 bitmask and `subnet_int` will also come out as 0.
+		 */
+		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
+	}
 
 	/*
 	 * AND the bitmask with the IP address' integer to truncate it down to
