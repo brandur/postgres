@@ -670,9 +670,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	}
 
 	/*
-	 * For IPv6, create an integer from either the first 4 or 8 bytes of the
-	 * IP (depending on whether we're on a 32 or 64-bit machine). For IPv4,
-	 * always use all 4 bytes.
+	 * Create an integer representation of the IP address by taking its first 4
+	 * or 8 bytes (depending on whether we're on a 32 or 64-bit machine).
 	 *
 	 * We're consuming an array of char, so make sure to byteswap on little
 	 * endian systems (an inet's IP array emulates big endian in that the
