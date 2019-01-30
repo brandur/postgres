@@ -778,7 +778,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * is an extra check that verifies that that nothing outside of the
 		 * least signifiant 31 bits is set.
 		 *
-		 * (PG_UINT32_MAX >> 1) = 31 bits of 1s
+		 * (PG_UINT32_MAX >> 1) = 2^32 - 1 = 31 bits of 1s
 		 */
 		Assert((netmask_size_and_subnet | (PG_UINT32_MAX >> 1)) == (PG_UINT32_MAX >> 1));
 
