@@ -646,10 +646,10 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	network_sortsupport_state *uss = ssup->ssup_extra;
 	inet	   *authoritative = DatumGetInetPP(original);
 	Datum		res;
-	Datum		ipaddr_int,
-				netmask_int,
-				subnet_bitmask,
-				subnet_int;
+	Datum		ipaddr_datum,
+				netmask,
+				subnet,
+				subnet_bitmask;
 	int			datum_subnet_size;
 
 	/*
@@ -677,14 +677,14 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	 */
 	if (ip_family(authoritative) == PGSQL_AF_INET6)
 	{
-		ipaddr_int = *((Datum *) ip_addr(authoritative));
-		ipaddr_int = DatumBigEndianToNative(ipaddr_int);
+		ipaddr_datum = *((Datum *) ip_addr(authoritative));
+		ipaddr_datum = DatumBigEndianToNative(ipaddr_datum);
 	}
 	else
 	{
-		uint32		ipaddr_int32 = *((uint32 *) ip_addr(authoritative));
+		uint32		ipaddr_datum32 = *((uint32 *) ip_addr(authoritative));
 #ifndef WORDS_BIGENDIAN
-		ipaddr_int = pg_bswap32(ipaddr_int32);
+		ipaddr_datum = pg_bswap32(ipaddr_datum32);
 #endif
 	}
 
@@ -702,8 +702,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	if (datum_subnet_size <= 0)
 	{
 		/* the netmask occupies the entirety of datum */
-		subnet_int = (Datum) 0;
-		netmask_int = ipaddr_int;
+		subnet = (Datum) 0;
+		netmask = ipaddr_datum;
 	}
 	else
 	{
@@ -714,7 +714,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * one to create a bitmask for an IP's subnet bits like `0001 1111`.
 		 *
 		 * Note that `datum_subnet_mask` may be == 0, in which case we'll
-		 * generate a 0 bitmask and `subnet_int` will also come out as 0.
+		 * generate a 0 bitmask and `subnet` will also come out as 0.
 		 */
 		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
 
@@ -722,10 +722,10 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * AND the bitmask with the IP address' integer to truncate it down to
 		 * just the bits after the netmask.
 		 */
-		subnet_int = ipaddr_int & subnet_bitmask;
+		subnet = ipaddr_datum & subnet_bitmask;
 
 		/* then use the mask's complement to get the netmask bits */
-		netmask_int = ipaddr_int & ~subnet_bitmask;
+		netmask = ipaddr_datum & ~subnet_bitmask;
 	}
 
 #if SIZEOF_DATUM == 8
@@ -736,7 +736,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * IPv6 on a 64-bit machine: keep the most significant 63 netmasked
 		 * bits.
 		 */
-		res |= netmask_int >> ABBREV_BITS_INET_FAMILY;
+		res |= netmask >> ABBREV_BITS_INET_FAMILY;
 	}
 	else
 	{
@@ -764,9 +764,9 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 */
 		if (datum_subnet_size > ABBREV_BITS_INET4_SUBNET)
 		{
-			subnet_int >>= datum_subnet_size - ABBREV_BITS_INET4_SUBNET;
+			subnet >>= datum_subnet_size - ABBREV_BITS_INET4_SUBNET;
 		}
-		netmask_size_and_subnet |= subnet_int;
+		netmask_size_and_subnet |= subnet;
 
 		/*
 		 * There's a fair bit of scary bit manipulation in this function. This
@@ -784,7 +784,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * least significant 31 positions where we store netmask size and
 		 * subnet.
 		 */
-		netmask_shifted = netmask_int << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
+		netmask_shifted = netmask << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
 		Assert((netmask_shifted & ~((Datum) PG_UINT32_MAX >> 1)) == netmask_shifted);
 
 		res |= netmask_shifted | netmask_size_and_subnet;
@@ -796,7 +796,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	 * 32-bit machine: keep the most significant 31 netmasked bits in both
 	 * IPv4 and IPv6.
 	 */
-	res |= netmask_int >> ABBREV_BITS_INET_FAMILY;
+	res |= netmask >> ABBREV_BITS_INET_FAMILY;
 
 #endif
 
