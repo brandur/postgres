@@ -26,7 +26,6 @@
 
 /* A few constants for the width in bits of certain values in inet/cidr
  * abbreviated keys. */
-#define ABBREV_BITS_INET_FAMILY 1
 #if SIZEOF_DATUM == 8
 #define ABBREV_BITS_INET4_NETMASK_SIZE 6
 #define ABBREV_BITS_INET4_SUBNET 25
@@ -663,7 +662,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	if (ip_family(authoritative) == PGSQL_AF_INET6)
 	{
 		/* Shift a 1 over to the datum's most significant bit. */
-		res = ((Datum) 1) << (SIZEOF_DATUM * BITS_PER_BYTE - ABBREV_BITS_INET_FAMILY);
+		res = ((Datum) 1) << (SIZEOF_DATUM * BITS_PER_BYTE - 1);
 	}
 
 	/*
@@ -736,7 +735,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * IPv6 on a 64-bit machine: keep the most significant 63 netmasked
 		 * bits.
 		 */
-		res |= netmask >> ABBREV_BITS_INET_FAMILY;
+		res |= netmask >> 1;
 	}
 	else
 	{
@@ -796,7 +795,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	 * 32-bit machine: keep the most significant 31 netmasked bits in both
 	 * IPv4 and IPv6.
 	 */
-	res |= netmask >> ABBREV_BITS_INET_FAMILY;
+	res |= netmask >> 1;
 
 #endif
 
