@@ -717,13 +717,10 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 */
 		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
 
-		/*
-		 * AND the bitmask with the IP address' integer to truncate it down to
-		 * just the bits after the netmask.
-		 */
+		/* bitwise AND the IP and bitmask to extract just the subnet bits */
 		subnet = ipaddr_datum & subnet_bitmask;
 
-		/* then use the mask's complement to get the netmask bits */
+		/* and likewise, use the mask's complement to get the netmask bits */
 		netmask = ipaddr_datum & ~subnet_bitmask;
 	}
 
