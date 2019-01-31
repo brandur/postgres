@@ -653,7 +653,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 				netmask_int,
 				subnet_bitmask,
 				subnet_int;
-	uint8		datum_size_left,
+	int			datum_size_left,
 				datum_subnet_size;
 
 	/*
@@ -671,28 +671,26 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	}
 
 	/*
-	 * Create an integer representation of the IP address by taking its first 4
-	 * or 8 bytes (depending on whether we're on a 32 or 64-bit machine).
+	 * Create an integer representation of the IP address by taking its first
+	 * 4 or 8 bytes. We take 8 bytes of an IPv6 address on a 64-bit machine
+	 * and 4 bytes on a 32-bit. Always take all 4 bytes of an IPv4 address.
 	 *
 	 * We're consuming an array of char, so make sure to byteswap on little
 	 * endian systems (an inet's IP array emulates big endian in that the
 	 * first byte is always the most significant).
 	 */
-	ipaddr_int = *((Datum *) ip_addr(authoritative));
-	ipaddr_int = DatumBigEndianToNative(ipaddr_int);
-
-#if SIZEOF_DATUM == 8
-	/*
-	 * In the case of IPv4 (4 bytes) on a 64-bit machine (8 bytes) we ingested
-	 * an extra 4 zeroed bytes in the most significant positions. Shift them
-	 * off to get the integer back to its appropriate value.
-	 */
-	if (ip_family(authoritative) == PGSQL_AF_INET)
+	if (ip_family(authoritative) == PGSQL_AF_INET6)
 	{
-		ipaddr_int >>= (SIZEOF_DATUM * BITS_PER_BYTE - ip_maxbits(authoritative));
-		Assert(ipaddr_int <= PG_UINT32_MAX);
+		ipaddr_int = *((Datum *) ip_addr(authoritative));
+		ipaddr_int = DatumBigEndianToNative(ipaddr_int);
 	}
+	else
+	{
+		uint32		ipaddr_int32 = *((uint32 *) ip_addr(authoritative));
+#ifndef WORDS_BIGENDIAN
+		ipaddr_int = pg_bswap32(ipaddr_int32);
 #endif
+	}
 
 	netmask_int = ipaddr_int;
 	subnet_int = (Datum) 0;
@@ -711,20 +709,23 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	datum_subnet_size = Min(ip_maxbits(authoritative) - ip_bits(authoritative),
 							datum_size_left);
 	Assert(datum_subnet_size <= SIZEOF_DATUM * BITS_PER_BYTE);
-	
+
 	/* we may have ended up with < 0 for a large netmask */
 	datum_subnet_size = Max(0, datum_subnet_size);
 
-	if (datum_subnet_size == SIZEOF_DATUM * BITS_PER_BYTE) {
+	if (datum_subnet_size == SIZEOF_DATUM * BITS_PER_BYTE)
+	{
 		/* `/0` where the subnet is the entirety of the datum */
 		subnet_bitmask = PG_UINT32_MAX;
-	} else {
+	}
+	else
+	{
 		/*
 		 * This shift creates a power of two like `0010 0000`, and subtracts
 		 * one to create a bitmask for an IP's subnet bits like `0001 1111`.
 		 *
-		 * Note that `datum_subnet_mask` may be == 0, in which case we'll generate
-		 * a 0 bitmask and `subnet_int` will also come out as 0.
+		 * Note that `datum_subnet_mask` may be == 0, in which case we'll
+		 * generate a 0 bitmask and `subnet_int` will also come out as 0.
 		 */
 		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
 	}
