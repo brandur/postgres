@@ -692,10 +692,6 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 #endif
 	}
 
-	netmask_int = ipaddr_int;
-	subnet_int = (Datum) 0;
-	datum_subnet_size = 0;
-
 	/* Extract subnet bits from ipaddr_ints if there are some present. */
 	datum_size_left = SIZEOF_DATUM * BITS_PER_BYTE - ip_bits(authoritative);
 
@@ -708,18 +704,18 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	 */
 	datum_subnet_size = Min(ip_maxbits(authoritative) - ip_bits(authoritative),
 							datum_size_left);
-	Assert(datum_subnet_size <= SIZEOF_DATUM * BITS_PER_BYTE);
 
 	/* we may have ended up with < 0 for a large netmask */
-	datum_subnet_size = Max(0, datum_subnet_size);
-
-	if (datum_subnet_size == SIZEOF_DATUM * BITS_PER_BYTE)
+	if (datum_subnet_size <= 0)
 	{
-		/* `/0` where the subnet is the entirety of the datum */
-		subnet_bitmask = PG_UINT32_MAX;
+		/* the netmask occupies the entirety of datum */
+		subnet_int = (Datum) 0;
+		netmask_int = ipaddr_int;
 	}
 	else
 	{
+		Assert(datum_subnet_size <= SIZEOF_DATUM * BITS_PER_BYTE);
+
 		/*
 		 * This shift creates a power of two like `0010 0000`, and subtracts
 		 * one to create a bitmask for an IP's subnet bits like `0001 1111`.
@@ -728,19 +724,16 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * generate a 0 bitmask and `subnet_int` will also come out as 0.
 		 */
 		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
+
+		/*
+		 * AND the bitmask with the IP address' integer to truncate it down to
+		 * just the bits after the netmask.
+		 */
+		subnet_int = ipaddr_int & subnet_bitmask;
+
+		/* then use the mask's complement to get the netmask bits */
+		netmask_int = ipaddr_int & ~subnet_bitmask;
 	}
-
-	/*
-	 * AND the bitmask with the IP address' integer to truncate it down to
-	 * just the bits after the netmask.
-	 */
-	subnet_int = ipaddr_int & subnet_bitmask;
-
-	/*
-	 * Integer representation for the netmask is the IP's integer minus
-	 * whatever we calculated for the subnet.
-	 */
-	netmask_int = ipaddr_int - subnet_int;
 
 #if SIZEOF_DATUM == 8
 
