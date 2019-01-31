@@ -650,8 +650,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 				netmask_int,
 				subnet_bitmask,
 				subnet_int;
-	int			datum_size_left,
-				datum_subnet_size;
+	int			datum_subnet_size;
 
 	/*
 	 * If another IP family is ever added, we'll need to redesign the key
@@ -689,18 +688,15 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 #endif
 	}
 
-	/* Extract subnet bits from ipaddr_ints if there are some present. */
-	datum_size_left = SIZEOF_DATUM * BITS_PER_BYTE - ip_bits(authoritative);
-
 	/*
 	 * Number of bits in subnet. e.g. An IPv4 that's /24 is 32 - 24 = 8.
 	 *
 	 * However, only some of the bits may have made it into the fixed sized
 	 * datum, so take the smallest number between bits in the subnet and bits
-	 * left in the datum.
+	 * in the datum which are not part of the netmask.
 	 */
 	datum_subnet_size = Min(ip_maxbits(authoritative) - ip_bits(authoritative),
-							datum_size_left);
+							SIZEOF_DATUM * BITS_PER_BYTE - ip_bits(authoritative));
 
 	/* we may have ended up with < 0 for a large netmask */
 	if (datum_subnet_size <= 0)
