@@ -700,14 +700,12 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	/* we may have ended up with < 0 for a large netmask */
 	if (datum_subnet_size <= 0)
 	{
-		/* the netmask occupies the entirety of datum */
+		/* the netmask occupies the entirety `ipaddr_datum` */
 		subnet = (Datum) 0;
 		netmask = ipaddr_datum;
 	}
 	else
 	{
-		Assert(datum_subnet_size <= SIZEOF_DATUM * BITS_PER_BYTE);
-
 		/*
 		 * This shift creates a power of two like `0010 0000`, and subtracts
 		 * one to create a bitmask for an IP's subnet bits like `0001 1111`.
