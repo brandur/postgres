@@ -701,8 +701,8 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	if (datum_subnet_size <= 0)
 	{
 		/* the netmask occupies the entirety `ipaddr_datum` */
-		subnet = (Datum) 0;
 		netmask = ipaddr_datum;
+		subnet = (Datum) 0;
 	}
 	else
 	{
@@ -715,11 +715,11 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 */
 		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
 
-		/* bitwise AND the IP and bitmask to extract just the subnet bits */
-		subnet = ipaddr_datum & subnet_bitmask;
-
 		/* and likewise, use the mask's complement to get the netmask bits */
 		netmask = ipaddr_datum & ~subnet_bitmask;
+
+		/* bitwise AND the IP and bitmask to extract just the subnet bits */
+		subnet = ipaddr_datum & subnet_bitmask;
 	}
 
 #if SIZEOF_DATUM == 8
