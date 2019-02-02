@@ -642,15 +642,42 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
 static Datum
 network_abbrev_convert(Datum original, SortSupport ssup)
 {
-	network_sortsupport_state *uss = ssup->ssup_extra;
 	inet	   *authoritative = DatumGetInetPP(original);
+	network_sortsupport_state *uss = ssup->ssup_extra;
+
+	Datum res = network_abbrev_convert_var(authoritative);
+
+	uss->input_count += 1;
+
+	/*
+	 * Cardinality estimation. The estimate uses uint32, so on a 64-bit
+	 * machine, XOR the two 32-bit halves together to produce slightly more
+	 * entropy.
+	 */
+	if (uss->estimating)
+	{
+		uint32		tmp;
+
+#if SIZEOF_DATUM == 8
+		tmp = (uint32) res ^ (uint32) ((uint64) res >> 32);
+#else							/* SIZEOF_DATUM != 8 */
+		tmp = (uint32) res;
+#endif
+
+		addHyperLogLog(&uss->abbr_card, DatumGetUInt32(hash_uint32(tmp)));
+	}
+
+	return res;
+}
+
+Datum
+network_abbrev_convert_var(const inet *authoritative) {
 	Datum		res;
 	Datum		ipaddr_datum,
 				network,
 				subnet,
 				subnet_bitmask;
 	int			datum_subnet_size;
-
 	/*
 	 * If another IP family is ever added, we'll need to redesign the key
 	 * abbreviation strategy.
@@ -793,26 +820,6 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	res |= network >> 1;
 
 #endif
-
-	uss->input_count += 1;
-
-	/*
-	 * Cardinality estimation. The estimate uses uint32, so on a 64-bit
-	 * machine, XOR the two 32-bit halves together to produce slightly more
-	 * entropy.
-	 */
-	if (uss->estimating)
-	{
-		uint32		tmp;
-
-#if SIZEOF_DATUM == 8
-		tmp = (uint32) res ^ (uint32) ((uint64) res >> 32);
-#else							/* SIZEOF_DATUM != 8 */
-		tmp = (uint32) res;
-#endif
-
-		addHyperLogLog(&uss->abbr_card, DatumGetUInt32(hash_uint32(tmp)));
-	}
 
 	return res;
 }

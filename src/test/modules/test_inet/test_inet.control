@@ -1,0 +1,4 @@
+comment = 'Test code for the inet type'
+default_version = '1.0'
+module_pathname = '$libdir/test_inet'
+relocatable = true
