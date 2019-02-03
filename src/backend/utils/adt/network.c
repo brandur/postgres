@@ -557,9 +557,9 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * All inet values have three major components (and take for example the
  * address 1.2.3.4/24):
  *
- *     * Their netmasked bits (1.2.3.0).
- *     * Their netmask size (/24).
- *     * Their subnet bits (0.0.0.4).
+ *     * A network, or netmasked bits (1.2.3.0).
+ *     * A netmask size (/24).
+ *     * A subnet, or bits outside of the netmask (0.0.0.4).
  *
  * cidr values are the same except that with only the first two components --
  * all their subnet bits *must* be zero (1.2.3.0/24).
@@ -573,7 +573,7 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * through to the next to break it:
  *
  *     1. IPv4 always appears before IPv6.
- *     2. Just bits in the netmask are compared.
+ *     2. Just bits in the network are compared.
  *     3. Netmask size is compared.
  *     4. All bits are compared (having made it here, we know that both
  *        netmasked bits and netmask size are equal, so we're in effect only
@@ -601,8 +601,8 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * all equal, the system will have to fall back to non-abbreviated comparison.
  *
  * +----------+---------------------+
- * | 1 bit IP |   31 bits netmask   |     (up to 1 bit
- * |  family  |     (truncated)     |   netmask omitted)
+ * | 1 bit IP |   31 bits network   |     (up to 1 bit
+ * |  family  |     (truncated)     |   network omitted)
  * +----------+---------------------+
  *
  * 64-bit machine:
@@ -617,8 +617,8 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * to save trips to the heap.
  *
  * +----------+-----------------------+--------------+--------------------+
- * | 1 bit IP |    32 bits netmask    |    6 bits    |   25 bits subnet   |
- * |  family  |        (full)         | netmask size |    (truncated)     |
+ * | 1 bit IP |    32 bits network    |    6 bits    |   25 bits subnet   |
+ * |  family  |        (full)         | network size |    (truncated)     |
  * +----------+-----------------------+--------------+--------------------+
  *
  * IPv6
@@ -627,15 +627,15 @@ network_abbrev_abort(int memtupcount, SortSupport ssup)
  * 32-bit machine:
  *
  * +----------+---------------------+
- * | 1 bit IP |   31 bits netmask   |    (up to 97 bits
- * |  family  |     (truncated)     |   netmask omitted)
+ * | 1 bit IP |   31 bits network   |    (up to 97 bits
+ * |  family  |     (truncated)     |   network omitted)
  * +----------+---------------------+
  *
  * 64-bit machine:
  *
  * +----------+---------------------------------+
- * | 1 bit IP |         63 bits netmask         |    (up to 65 bits
- * |  family  |           (truncated)           |   netmask omitted)
+ * | 1 bit IP |         63 bits network         |    (up to 65 bits
+ * |  family  |           (truncated)           |   network omitted)
  * +----------+---------------------------------+
  *
  */
@@ -646,7 +646,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	inet	   *authoritative = DatumGetInetPP(original);
 	Datum		res;
 	Datum		ipaddr_datum,
-				netmask,
+				network,
 				subnet,
 				subnet_bitmask;
 	int			datum_subnet_size;
@@ -692,16 +692,16 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	 *
 	 * However, only some of the bits may have made it into the fixed sized
 	 * datum, so take the smallest number between bits in the subnet and bits
-	 * in the datum which are not part of the netmask.
+	 * in the datum which are not part of the network.
 	 */
 	datum_subnet_size = Min(ip_maxbits(authoritative) - ip_bits(authoritative),
 							SIZEOF_DATUM * BITS_PER_BYTE - ip_bits(authoritative));
 
-	/* we may have ended up with < 0 for a large netmask */
+	/* we may have ended up with < 0 for a large netmask size */
 	if (datum_subnet_size <= 0)
 	{
-		/* the netmask occupies the entirety `ipaddr_datum` */
-		netmask = ipaddr_datum;
+		/* the network occupies the entirety `ipaddr_datum` */
+		network = ipaddr_datum;
 		subnet = (Datum) 0;
 	}
 	else
@@ -716,7 +716,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
 
 		/* and likewise, use the mask's complement to get the netmask bits */
-		netmask = ipaddr_datum & ~subnet_bitmask;
+		network = ipaddr_datum & ~subnet_bitmask;
 
 		/* bitwise AND the IP and bitmask to extract just the subnet bits */
 		subnet = ipaddr_datum & subnet_bitmask;
@@ -730,7 +730,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * IPv6 on a 64-bit machine: keep the most significant 63 netmasked
 		 * bits.
 		 */
-		res |= netmask >> 1;
+		res |= network >> 1;
 	}
 	else
 	{
@@ -740,12 +740,12 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * detail).
 		 */
 
-		Datum		netmask_shifted;
+		Datum		network_shifted;
 		Datum		netmask_size_and_subnet = 0;
 
 		/*
-		 * an IPv4 netmask has a maximum value of 32 which takes 6 bits to
-		 * contain
+		 * an IPv4 netmask size has a maximum value of 32, which takes 6 bits
+		 * to contain (0x20 in hex)
 		 */
 		Datum		netmask_size = (Datum) ip_bits(authoritative);
 
@@ -778,10 +778,10 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 		 * least significant 31 positions where we store netmask size and
 		 * subnet.
 		 */
-		netmask_shifted = netmask << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
-		Assert((netmask_shifted & ~((Datum) PG_UINT32_MAX >> 1)) == netmask_shifted);
+		network_shifted = network << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
+		Assert((network_shifted & ~((Datum) PG_UINT32_MAX >> 1)) == network_shifted);
 
-		res |= netmask_shifted | netmask_size_and_subnet;
+		res |= network_shifted | netmask_size_and_subnet;
 	}
 
 #else							/* SIZEOF_DATUM != 8 */
@@ -790,7 +790,7 @@ network_abbrev_convert(Datum original, SortSupport ssup)
 	 * 32-bit machine: keep the most significant 31 netmasked bits in both
 	 * IPv4 and IPv6.
 	 */
-	res |= netmask >> 1;
+	res |= network >> 1;
 
 #endif
 
