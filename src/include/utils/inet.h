@@ -146,4 +146,7 @@ extern inet *cidr_set_masklen_internal(const inet *src, int bits);
 extern int	bitncmp(const unsigned char *l, const unsigned char *r, int n);
 extern int	bitncommon(const unsigned char *l, const unsigned char *r, int n);
 
+/* exported so we can access it from `test/modules/test_inet` */
+extern Datum network_abbrev_convert_var(const inet *original);
+
 #endif							/* INET_H */
