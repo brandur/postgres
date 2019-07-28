@@ -31,7 +31,7 @@ static bool fix_opfuncids_walker(Node *node, void *context);
 static bool planstate_walk_subplans(List *plans, bool (*walker) (),
 									void *context);
 static bool planstate_walk_members(PlanState **planstates, int nplans,
-					   bool (*walker) (), void *context);
+								   bool (*walker) (), void *context);
 
 
 /*
@@ -442,7 +442,7 @@ exprTypmod(const Node *expr)
 				typmod = exprTypmod((Node *) linitial(cexpr->args));
 				if (typmod < 0)
 					return -1;	/* no point in trying harder */
-				for_each_cell(arg, lnext(list_head(cexpr->args)))
+				for_each_cell(arg, cexpr->args, list_second_cell(cexpr->args))
 				{
 					Node	   *e = (Node *) lfirst(arg);
 
@@ -470,7 +470,7 @@ exprTypmod(const Node *expr)
 				typmod = exprTypmod((Node *) linitial(mexpr->args));
 				if (typmod < 0)
 					return -1;	/* no point in trying harder */
-				for_each_cell(arg, lnext(list_head(mexpr->args)))
+				for_each_cell(arg, mexpr->args, list_second_cell(mexpr->args))
 				{
 					Node	   *e = (Node *) lfirst(arg);
 
@@ -2192,6 +2192,17 @@ expression_tree_walker(Node *node,
 				/* groupClauses are deemed uninteresting */
 			}
 			break;
+		case T_IndexClause:
+			{
+				IndexClause *iclause = (IndexClause *) node;
+
+				if (walker(iclause->rinfo, context))
+					return true;
+				if (expression_tree_walker((Node *) iclause->indexquals,
+										   walker, context))
+					return true;
+			}
+			break;
 		case T_PlaceHolderVar:
 			return walker(((PlaceHolderVar *) node)->phexpr, context);
 		case T_InferenceElem:
@@ -2996,6 +3007,17 @@ expression_tree_mutator(Node *node,
 				MUTATE(newnode->larg, setop->larg, Node *);
 				MUTATE(newnode->rarg, setop->rarg, Node *);
 				/* We do not mutate groupClauses by default */
+				return (Node *) newnode;
+			}
+			break;
+		case T_IndexClause:
+			{
+				IndexClause *iclause = (IndexClause *) node;
+				IndexClause *newnode;
+
+				FLATCOPY(newnode, iclause, IndexClause);
+				MUTATE(newnode->rinfo, iclause->rinfo, RestrictInfo *);
+				MUTATE(newnode->indexquals, iclause->indexquals, List *);
 				return (Node *) newnode;
 			}
 			break;

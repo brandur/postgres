@@ -51,23 +51,23 @@ typedef struct
 	bool		in_agg_direct_args;
 } check_ungrouped_columns_context;
 
-static int check_agg_arguments(ParseState *pstate,
-					List *directargs,
-					List *args,
-					Expr *filter);
+static int	check_agg_arguments(ParseState *pstate,
+								List *directargs,
+								List *args,
+								Expr *filter);
 static bool check_agg_arguments_walker(Node *node,
-						   check_agg_arguments_context *context);
+									   check_agg_arguments_context *context);
 static void check_ungrouped_columns(Node *node, ParseState *pstate, Query *qry,
-						List *groupClauses, List *groupClauseVars,
-						bool have_non_var_grouping,
-						List **func_grouped_rels);
+									List *groupClauses, List *groupClauseCommonVars,
+									bool have_non_var_grouping,
+									List **func_grouped_rels);
 static bool check_ungrouped_columns_walker(Node *node,
-							   check_ungrouped_columns_context *context);
+										   check_ungrouped_columns_context *context);
 static void finalize_grouping_exprs(Node *node, ParseState *pstate, Query *qry,
-						List *groupClauses, bool hasJoinRTEs,
-						bool have_non_var_grouping);
+									List *groupClauses, bool hasJoinRTEs,
+									bool have_non_var_grouping);
 static bool finalize_grouping_exprs_walker(Node *node,
-							   check_ungrouped_columns_context *context);
+										   check_ungrouped_columns_context *context);
 static void check_agglevels_and_constraints(ParseState *pstate, Node *expr);
 static List *expand_groupingset_node(GroupingSet *gs);
 static Node *make_agg_arg(Oid argtype, Oid argcollation);
@@ -520,6 +520,14 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 				err = _("grouping operations are not allowed in partition key expressions");
 
 			break;
+		case EXPR_KIND_GENERATED_COLUMN:
+
+			if (isAgg)
+				err = _("aggregate functions are not allowed in column generation expressions");
+			else
+				err = _("grouping operations are not allowed in column generation expressions");
+
+			break;
 
 		case EXPR_KIND_CALL_ARGUMENT:
 			if (isAgg)
@@ -922,6 +930,9 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 		case EXPR_KIND_COPY_WHERE:
 			err = _("window functions are not allowed in COPY FROM WHERE conditions");
 			break;
+		case EXPR_KIND_GENERATED_COLUMN:
+			err = _("window functions are not allowed in column generation expressions");
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the
@@ -1072,7 +1083,7 @@ parseCheckAggregates(ParseState *pstate, Query *qry)
 
 		if (gset_common)
 		{
-			for_each_cell(l, lnext(list_head(gsets)))
+			for_each_cell(l, gsets, list_second_cell(gsets))
 			{
 				gset_common = list_intersection_int(gset_common, lfirst(l));
 				if (!gset_common)
@@ -1121,7 +1132,7 @@ parseCheckAggregates(ParseState *pstate, Query *qry)
 		if (expr == NULL)
 			continue;			/* probably cannot happen */
 
-		groupClauses = lcons(expr, groupClauses);
+		groupClauses = lappend(groupClauses, expr);
 	}
 
 	/*
@@ -1711,11 +1722,12 @@ expand_groupingset_node(GroupingSet *gs)
 	return result;
 }
 
+/* list_sort comparator to sort sub-lists by length */
 static int
-cmp_list_len_asc(const void *a, const void *b)
+cmp_list_len_asc(const ListCell *a, const ListCell *b)
 {
-	int			la = list_length(*(List *const *) a);
-	int			lb = list_length(*(List *const *) b);
+	int			la = list_length((const List *) lfirst(a));
+	int			lb = list_length((const List *) lfirst(b));
 
 	return (la > lb) ? 1 : (la == lb) ? 0 : -1;
 }
@@ -1766,7 +1778,7 @@ expand_grouping_sets(List *groupingSets, int limit)
 		result = lappend(result, list_union_int(NIL, (List *) lfirst(lc)));
 	}
 
-	for_each_cell(lc, lnext(list_head(expanded_groups)))
+	for_each_cell(lc, expanded_groups, list_second_cell(expanded_groups))
 	{
 		List	   *p = lfirst(lc);
 		List	   *new_result = NIL;
@@ -1786,27 +1798,8 @@ expand_grouping_sets(List *groupingSets, int limit)
 		result = new_result;
 	}
 
-	if (list_length(result) > 1)
-	{
-		int			result_len = list_length(result);
-		List	  **buf = palloc(sizeof(List *) * result_len);
-		List	  **ptr = buf;
-
-		foreach(lc, result)
-		{
-			*ptr++ = lfirst(lc);
-		}
-
-		qsort(buf, result_len, sizeof(List *), cmp_list_len_asc);
-
-		result = NIL;
-		ptr = buf;
-
-		while (result_len-- > 0)
-			result = lappend(result, *ptr++);
-
-		pfree(buf);
-	}
+	/* Now sort the lists by length */
+	list_sort(result, cmp_list_len_asc);
 
 	return result;
 }

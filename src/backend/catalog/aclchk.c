@@ -21,6 +21,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/sysattr.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
@@ -119,26 +120,26 @@ static List *objectNamesToOids(ObjectType objtype, List *objnames);
 static List *objectsInSchemaToOids(ObjectType objtype, List *nspnames);
 static List *getRelationsInNamespace(Oid namespaceId, char relkind);
 static void expand_col_privileges(List *colnames, Oid table_oid,
-					  AclMode this_privileges,
-					  AclMode *col_privileges,
-					  int num_col_privileges);
+								  AclMode this_privileges,
+								  AclMode *col_privileges,
+								  int num_col_privileges);
 static void expand_all_col_privileges(Oid table_oid, Form_pg_class classForm,
-						  AclMode this_privileges,
-						  AclMode *col_privileges,
-						  int num_col_privileges);
+									  AclMode this_privileges,
+									  AclMode *col_privileges,
+									  int num_col_privileges);
 static AclMode string_to_privilege(const char *privname);
 static const char *privilege_to_string(AclMode privilege);
 static AclMode restrict_and_check_grant(bool is_grant, AclMode avail_goptions,
-						 bool all_privs, AclMode privileges,
-						 Oid objectId, Oid grantorId,
-						 ObjectType objtype, const char *objname,
-						 AttrNumber att_number, const char *colname);
+										bool all_privs, AclMode privileges,
+										Oid objectId, Oid grantorId,
+										ObjectType objtype, const char *objname,
+										AttrNumber att_number, const char *colname);
 static AclMode pg_aclmask(ObjectType objtype, Oid table_oid, AttrNumber attnum,
-		   Oid roleid, AclMode mask, AclMaskHow how);
+						  Oid roleid, AclMode mask, AclMaskHow how);
 static void recordExtensionInitPriv(Oid objoid, Oid classoid, int objsubid,
-						Acl *new_acl);
+									Acl *new_acl);
 static void recordExtensionInitPrivWorker(Oid objoid, Oid classoid, int objsubid,
-							  Acl *new_acl);
+										  Acl *new_acl);
 
 
 #ifdef ACLDEBUG
@@ -821,7 +822,7 @@ objectsInSchemaToOids(ObjectType objtype, List *nspnames)
 					ScanKeyData key[2];
 					int			keycount;
 					Relation	rel;
-					HeapScanDesc scan;
+					TableScanDesc scan;
 					HeapTuple	tuple;
 
 					keycount = 0;
@@ -843,16 +844,16 @@ objectsInSchemaToOids(ObjectType objtype, List *nspnames)
 									CharGetDatum(PROKIND_PROCEDURE));
 
 					rel = table_open(ProcedureRelationId, AccessShareLock);
-					scan = heap_beginscan_catalog(rel, keycount, key);
+					scan = table_beginscan_catalog(rel, keycount, key);
 
 					while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 					{
-						Oid		oid = ((Form_pg_proc) GETSTRUCT(tuple))->oid;
+						Oid			oid = ((Form_pg_proc) GETSTRUCT(tuple))->oid;
 
 						objects = lappend_oid(objects, oid);
 					}
 
-					heap_endscan(scan);
+					table_endscan(scan);
 					table_close(rel, AccessShareLock);
 				}
 				break;
@@ -877,7 +878,7 @@ getRelationsInNamespace(Oid namespaceId, char relkind)
 	List	   *relations = NIL;
 	ScanKeyData key[2];
 	Relation	rel;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tuple;
 
 	ScanKeyInit(&key[0],
@@ -890,16 +891,16 @@ getRelationsInNamespace(Oid namespaceId, char relkind)
 				CharGetDatum(relkind));
 
 	rel = table_open(RelationRelationId, AccessShareLock);
-	scan = heap_beginscan_catalog(rel, 2, key);
+	scan = table_beginscan_catalog(rel, 2, key);
 
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
-		Oid		oid  = ((Form_pg_class) GETSTRUCT(tuple))->oid;
+		Oid			oid = ((Form_pg_class) GETSTRUCT(tuple))->oid;
 
 		relations = lappend_oid(relations, oid);
 	}
 
-	heap_endscan(scan);
+	table_endscan(scan);
 	table_close(rel, AccessShareLock);
 
 	return relations;
@@ -1310,7 +1311,7 @@ SetDefaultACL(InternalDefaultACL *iacls)
 	}
 	else
 	{
-		Oid		defAclOid;
+		Oid			defAclOid;
 
 		/* Prepare to insert or update pg_default_acl entry */
 		MemSet(values, 0, sizeof(values));
@@ -1383,7 +1384,7 @@ SetDefaultACL(InternalDefaultACL *iacls)
 		if (isNew)
 			InvokeObjectPostCreateHook(DefaultAclRelationId, defAclOid, 0);
 		else
-			InvokeObjectPostAlterHook(DefaultAclRelationId,  defAclOid, 0);
+			InvokeObjectPostAlterHook(DefaultAclRelationId, defAclOid, 0);
 	}
 
 	if (HeapTupleIsValid(tuple))
@@ -1640,7 +1641,7 @@ expand_all_col_privileges(Oid table_oid, Form_pg_class classForm,
 
 /*
  *	This processes attributes, but expects to be called from
- *	ExecGrant_Relation, not directly from ExecGrantStmt.
+ *	ExecGrant_Relation, not directly from ExecuteGrantStmt.
  */
 static void
 ExecGrant_Attribute(InternalGrant *istmt, Oid relOid, const char *relname,

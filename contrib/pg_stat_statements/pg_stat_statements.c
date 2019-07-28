@@ -61,7 +61,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "access/hash.h"
 #include "catalog/pg_authid.h"
 #include "executor/instrument.h"
 #include "funcapi.h"
@@ -78,6 +77,7 @@
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/hashutils.h"
 #include "utils/memutils.h"
 
 PG_MODULE_MAGIC;
@@ -300,45 +300,46 @@ static void pgss_shmem_shutdown(int code, Datum arg);
 static void pgss_post_parse_analyze(ParseState *pstate, Query *query);
 static void pgss_ExecutorStart(QueryDesc *queryDesc, int eflags);
 static void pgss_ExecutorRun(QueryDesc *queryDesc,
-				 ScanDirection direction,
-				 uint64 count, bool execute_once);
+							 ScanDirection direction,
+							 uint64 count, bool execute_once);
 static void pgss_ExecutorFinish(QueryDesc *queryDesc);
 static void pgss_ExecutorEnd(QueryDesc *queryDesc);
 static void pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
-					ProcessUtilityContext context, ParamListInfo params,
-					QueryEnvironment *queryEnv,
-					DestReceiver *dest, char *completionTag);
+								ProcessUtilityContext context, ParamListInfo params,
+								QueryEnvironment *queryEnv,
+								DestReceiver *dest, char *completionTag);
 static uint64 pgss_hash_string(const char *str, int len);
 static void pgss_store(const char *query, uint64 queryId,
-		   int query_location, int query_len,
-		   double total_time, uint64 rows,
-		   const BufferUsage *bufusage,
-		   pgssJumbleState *jstate);
+					   int query_location, int query_len,
+					   double total_time, uint64 rows,
+					   const BufferUsage *bufusage,
+					   pgssJumbleState *jstate);
 static void pg_stat_statements_internal(FunctionCallInfo fcinfo,
-							pgssVersion api_version,
-							bool showtext);
+										pgssVersion api_version,
+										bool showtext);
 static Size pgss_memsize(void);
 static pgssEntry *entry_alloc(pgssHashKey *key, Size query_offset, int query_len,
-			int encoding, bool sticky);
+							  int encoding, bool sticky);
 static void entry_dealloc(void);
 static bool qtext_store(const char *query, int query_len,
-			Size *query_offset, int *gc_count);
+						Size *query_offset, int *gc_count);
 static char *qtext_load_file(Size *buffer_size);
 static char *qtext_fetch(Size query_offset, int query_len,
-			char *buffer, Size buffer_size);
+						 char *buffer, Size buffer_size);
 static bool need_gc_qtexts(void);
 static void gc_qtexts(void);
 static void entry_reset(Oid userid, Oid dbid, uint64 queryid);
 static void AppendJumble(pgssJumbleState *jstate,
-			 const unsigned char *item, Size size);
+						 const unsigned char *item, Size size);
 static void JumbleQuery(pgssJumbleState *jstate, Query *query);
 static void JumbleRangeTable(pgssJumbleState *jstate, List *rtable);
+static void JumbleRowMarks(pgssJumbleState *jstate, List *rowMarks);
 static void JumbleExpr(pgssJumbleState *jstate, Node *node);
 static void RecordConstLocation(pgssJumbleState *jstate, int location);
 static char *generate_normalized_query(pgssJumbleState *jstate, const char *query,
-						  int query_loc, int *query_len_p, int encoding);
+									   int query_loc, int *query_len_p, int encoding);
 static void fill_in_constant_lengths(pgssJumbleState *jstate, const char *query,
-						 int query_loc);
+									 int query_loc);
 static int	comp_location(const void *a, const void *b);
 
 
@@ -625,7 +626,7 @@ pgss_shmem_startup(void)
 
 	/*
 	 * Remove the persisted stats file so it's not included in
-	 * backups/replication slaves, etc.  A new file will be written on next
+	 * backups/replication standbys, etc.  A new file will be written on next
 	 * shutdown.
 	 *
 	 * Note: it's okay if the PGSS_TEXT_FILE is included in a basebackup,
@@ -787,7 +788,7 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query)
 	Assert(query->queryId == UINT64CONST(0));
 
 	/* Safety check... */
-	if (!pgss || !pgss_hash)
+	if (!pgss || !pgss_hash || !pgss_enabled())
 		return;
 
 	/*
@@ -1153,8 +1154,9 @@ pgss_store(const char *query, uint64 queryId,
 		queryId = pgss_hash_string(query, query_len);
 
 		/*
-		 * If we are unlucky enough to get a hash of zero(invalid), use queryID
-		 * as 2 instead, queryID 1 is already in use for normal statements.
+		 * If we are unlucky enough to get a hash of zero(invalid), use
+		 * queryID as 2 instead, queryID 1 is already in use for normal
+		 * statements.
 		 */
 		if (queryId == UINT64CONST(0))
 			queryId = UINT64CONST(2);
@@ -1991,7 +1993,10 @@ qtext_load_file(Size *buffer_size)
 		return NULL;
 	}
 
-	CloseTransientFile(fd);
+	if (CloseTransientFile(fd) != 0)
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m", PGSS_TEXT_FILE)));
 
 	*buffer_size = stat.st_size;
 	return buf;
@@ -2426,7 +2431,7 @@ JumbleQuery(pgssJumbleState *jstate, Query *query)
 	JumbleExpr(jstate, (Node *) query->sortClause);
 	JumbleExpr(jstate, query->limitOffset);
 	JumbleExpr(jstate, query->limitCount);
-	/* we ignore rowMarks */
+	JumbleRowMarks(jstate, query->rowMarks);
 	JumbleExpr(jstate, query->setOperations);
 }
 
@@ -2481,6 +2486,26 @@ JumbleRangeTable(pgssJumbleState *jstate, List *rtable)
 			default:
 				elog(ERROR, "unrecognized RTE kind: %d", (int) rte->rtekind);
 				break;
+		}
+	}
+}
+
+/*
+ * Jumble a rowMarks list
+ */
+static void
+JumbleRowMarks(pgssJumbleState *jstate, List *rowMarks)
+{
+	ListCell   *lc;
+
+	foreach(lc, rowMarks)
+	{
+		RowMarkClause *rowmark = lfirst_node(RowMarkClause, lc);
+		if (!rowmark->pushedDown)
+		{
+			APP_JUMB(rowmark->rti);
+			APP_JUMB(rowmark->strength);
+			APP_JUMB(rowmark->waitPolicy);
 		}
 	}
 }
@@ -2927,6 +2952,7 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 
 				/* we store the string name because RTE_CTE RTEs need it */
 				APP_JUMB_STRING(cte->ctename);
+				APP_JUMB(cte->ctematerialized);
 				JumbleQuery(jstate, castNode(Query, cte->ctequery));
 			}
 			break;

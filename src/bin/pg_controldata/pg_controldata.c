@@ -20,10 +20,12 @@
 
 #include <time.h>
 
+#include "access/transam.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
+#include "common/logging.h"
 #include "pg_getopt.h"
 #include "getopt_long.h"
 
@@ -97,7 +99,6 @@ main(int argc, char *argv[])
 	time_t		time_tmp;
 	char		pgctime_str[128];
 	char		ckpttime_str[128];
-	char		sysident_str[32];
 	char		mock_auth_nonce_str[MOCK_AUTH_NONCE_LEN * 2 + 1];
 	const char *strftime_fmt = "%c";
 	const char *progname;
@@ -106,8 +107,8 @@ main(int argc, char *argv[])
 	int			i;
 	int			WalSegSz;
 
+	pg_logging_init(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_controldata"));
-
 	progname = get_progname(argv[0]);
 
 	if (argc > 1)
@@ -149,8 +150,8 @@ main(int argc, char *argv[])
 	/* Complain if any arguments remain */
 	if (optind < argc)
 	{
-		fprintf(stderr, _("%s: too many command-line arguments (first is \"%s\")\n"),
-				progname, argv[optind]);
+		pg_log_error("too many command-line arguments (first is \"%s\")",
+					 argv[optind]);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
@@ -158,13 +159,13 @@ main(int argc, char *argv[])
 
 	if (DataDir == NULL)
 	{
-		fprintf(stderr, _("%s: no data directory specified\n"), progname);
+		pg_log_error("no data directory specified");
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 		exit(1);
 	}
 
 	/* get a copy of the control file */
-	ControlFile = get_controlfile(DataDir, progname, &crc_ok);
+	ControlFile = get_controlfile(DataDir, &crc_ok);
 	if (!crc_ok)
 		printf(_("WARNING: Calculated CRC checksum does not match value stored in file.\n"
 				 "Either the file is corrupt, or it has a different layout than this program\n"
@@ -220,13 +221,6 @@ main(int argc, char *argv[])
 	else
 		strcpy(xlogfilename, _("???"));
 
-	/*
-	 * Format system_identifier and mock_authentication_nonce separately to
-	 * keep platform-dependent format code out of the translatable message
-	 * string.
-	 */
-	snprintf(sysident_str, sizeof(sysident_str), UINT64_FORMAT,
-			 ControlFile->system_identifier);
 	for (i = 0; i < MOCK_AUTH_NONCE_LEN; i++)
 		snprintf(&mock_auth_nonce_str[i * 2], 3, "%02x",
 				 (unsigned char) ControlFile->mock_authentication_nonce[i]);
@@ -235,8 +229,8 @@ main(int argc, char *argv[])
 		   ControlFile->pg_control_version);
 	printf(_("Catalog version number:               %u\n"),
 		   ControlFile->catalog_version_no);
-	printf(_("Database system identifier:           %s\n"),
-		   sysident_str);
+	printf(_("Database system identifier:           %llu\n"),
+		   (unsigned long long) ControlFile->system_identifier);
 	printf(_("Database cluster state:               %s\n"),
 		   dbState(ControlFile->state));
 	printf(_("pg_control last modified:             %s\n"),
@@ -256,8 +250,8 @@ main(int argc, char *argv[])
 	printf(_("Latest checkpoint's full_page_writes: %s\n"),
 		   ControlFile->checkPointCopy.fullPageWrites ? _("on") : _("off"));
 	printf(_("Latest checkpoint's NextXID:          %u:%u\n"),
-		   ControlFile->checkPointCopy.nextXidEpoch,
-		   ControlFile->checkPointCopy.nextXid);
+		   EpochFromFullTransactionId(ControlFile->checkPointCopy.nextFullXid),
+		   XidFromFullTransactionId(ControlFile->checkPointCopy.nextFullXid));
 	printf(_("Latest checkpoint's NextOID:          %u\n"),
 		   ControlFile->checkPointCopy.nextOid);
 	printf(_("Latest checkpoint's NextMultiXactId:  %u\n"),
@@ -304,6 +298,8 @@ main(int argc, char *argv[])
 		   ControlFile->MaxConnections);
 	printf(_("max_worker_processes setting:         %d\n"),
 		   ControlFile->max_worker_processes);
+	printf(_("max_wal_senders setting:              %d\n"),
+		   ControlFile->max_wal_senders);
 	printf(_("max_prepared_xacts setting:           %d\n"),
 		   ControlFile->max_prepared_xacts);
 	printf(_("max_locks_per_xact setting:           %d\n"),

@@ -40,7 +40,7 @@ ExecScanFetch(ScanState *node,
 
 	CHECK_FOR_INTERRUPTS();
 
-	if (estate->es_epqTuple != NULL)
+	if (estate->es_epqTupleSlot != NULL)
 	{
 		/*
 		 * We are inside an EvalPlanQual recheck.  Return the test tuple if
@@ -63,7 +63,7 @@ ExecScanFetch(ScanState *node,
 				ExecClearTuple(slot);	/* would not be returned by scan */
 			return slot;
 		}
-		else if (estate->es_epqTupleSet[scanrelid - 1])
+		else if (estate->es_epqTupleSlot[scanrelid - 1] != NULL)
 		{
 			TupleTableSlot *slot = node->ss_ScanTupleSlot;
 
@@ -73,17 +73,16 @@ ExecScanFetch(ScanState *node,
 			/* Else mark to remember that we shouldn't return more */
 			estate->es_epqScanDone[scanrelid - 1] = true;
 
-			/* Return empty slot if we haven't got a test tuple */
-			if (estate->es_epqTuple[scanrelid - 1] == NULL)
-				return ExecClearTuple(slot);
+			slot = estate->es_epqTupleSlot[scanrelid - 1];
 
-			/* Store test tuple in the plan node's scan slot */
-			ExecForceStoreHeapTuple(estate->es_epqTuple[scanrelid - 1],
-									slot);
+			/* Return empty slot if we haven't got a test tuple */
+			if (TupIsNull(slot))
+				return NULL;
 
 			/* Check if it meets the access-method conditions */
 			if (!(*recheckMtd) (node, slot))
-				ExecClearTuple(slot);	/* would not be returned by scan */
+				return ExecClearTuple(slot);	/* would not be returned by
+												 * scan */
 
 			return slot;
 		}
@@ -99,8 +98,7 @@ ExecScanFetch(ScanState *node,
  *		ExecScan
  *
  *		Scans the relation using the 'access method' indicated and
- *		returns the next qualifying tuple in the direction specified
- *		in the global variable ExecDirection.
+ *		returns the next qualifying tuple.
  *		The access method returns the next tuple and ExecScan() is
  *		responsible for checking the tuple returned against the qual-clause.
  *

@@ -119,6 +119,16 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--concurrently</option></term>
+      <listitem>
+       <para>
+        Use the <literal>CONCURRENTLY</literal> option.  See <xref
+        linkend="sql-reindex"/> for further information.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option><optional>-d</optional> <replaceable class="parameter">dbname</replaceable></option></term>
       <term><option><optional>--dbname=</optional><replaceable class="parameter">dbname</replaceable></option></term>
       <listitem>
@@ -152,6 +162,29 @@ PostgreSQL documentation
         Recreate <replaceable class="parameter">index</replaceable> only.
         Multiple indexes can be recreated by writing multiple
         <option>-i</option> switches.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-j <replaceable class="parameter">njobs</replaceable></option></term>
+      <term><option>--jobs=<replaceable class="parameter">njobs</replaceable></option></term>
+      <listitem>
+       <para>
+        Execute the reindex commands in parallel by running
+        <replaceable class="parameter">njobs</replaceable>
+        commands simultaneously.  This option reduces the time of the
+        processing but it also increases the load on the database server.
+       </para>
+       <para>
+        <application>reindexdb</application> will open
+        <replaceable class="parameter">njobs</replaceable> connections to the
+        database, so make sure your <xref linkend="guc-max-connections"/>
+        setting is high enough to accommodate all connections.
+       </para>
+       <para>
+        Note that this option is incompatible with the <option>--index</option>
+        and <option>--system</option> options.
        </para>
       </listitem>
      </varlistentry>
@@ -339,6 +372,17 @@ PostgreSQL documentation
     <listitem>
      <para>
       Default connection parameters
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><envar>PG_COLOR</envar></term>
+    <listitem>
+     <para>
+      Specifies whether to use color in diagnostics messages.  Possible values
+      are <literal>always</literal>, <literal>auto</literal>,
+      <literal>never</literal>.
      </para>
     </listitem>
    </varlistentry>

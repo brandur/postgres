@@ -20,6 +20,7 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "bootstrap/bootstrap.h"
@@ -557,11 +558,15 @@ bootstrap_signals(void)
 {
 	Assert(!IsUnderPostmaster);
 
-	/* Set up appropriately for interactive use */
-	pqsignal(SIGHUP, die);
-	pqsignal(SIGINT, die);
-	pqsignal(SIGTERM, die);
-	pqsignal(SIGQUIT, die);
+	/*
+	 * We don't actually need any non-default signal handling in bootstrap
+	 * mode; "curl up and die" is a sufficient response for all these cases.
+	 * Let's set that handling explicitly, as documentation if nothing else.
+	 */
+	pqsignal(SIGHUP, SIG_DFL);
+	pqsignal(SIGINT, SIG_DFL);
+	pqsignal(SIGTERM, SIG_DFL);
+	pqsignal(SIGQUIT, SIG_DFL);
 }
 
 /*
@@ -594,7 +599,7 @@ boot_openrel(char *relname)
 	int			i;
 	struct typmap **app;
 	Relation	rel;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tup;
 
 	if (strlen(relname) >= NAMEDATALEN)
@@ -604,16 +609,16 @@ boot_openrel(char *relname)
 	{
 		/* We can now load the pg_type data */
 		rel = table_open(TypeRelationId, NoLock);
-		scan = heap_beginscan_catalog(rel, 0, NULL);
+		scan = table_beginscan_catalog(rel, 0, NULL);
 		i = 0;
 		while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
 			++i;
-		heap_endscan(scan);
+		table_endscan(scan);
 		app = Typ = ALLOC(struct typmap *, i + 1);
 		while (i-- > 0)
 			*app++ = ALLOC(struct typmap, 1);
 		*app = NULL;
-		scan = heap_beginscan_catalog(rel, 0, NULL);
+		scan = table_beginscan_catalog(rel, 0, NULL);
 		app = Typ;
 		while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
 		{
@@ -623,7 +628,7 @@ boot_openrel(char *relname)
 				   sizeof((*app)->am_typ));
 			app++;
 		}
-		heap_endscan(scan);
+		table_endscan(scan);
 		table_close(rel, NoLock);
 	}
 
@@ -711,7 +716,7 @@ DefineAttr(char *name, char *type, int attnum, int nullness)
 
 	namestrcpy(&attrtypes[attnum]->attname, name);
 	elog(DEBUG4, "column %s %s", NameStr(attrtypes[attnum]->attname), type);
-	attrtypes[attnum]->attnum = attnum + 1; /* fillatt */
+	attrtypes[attnum]->attnum = attnum + 1;
 
 	typeoid = gettype(type);
 
@@ -915,7 +920,7 @@ gettype(char *type)
 {
 	int			i;
 	Relation	rel;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tup;
 	struct typmap **app;
 
@@ -939,16 +944,16 @@ gettype(char *type)
 		}
 		elog(DEBUG4, "external type: %s", type);
 		rel = table_open(TypeRelationId, NoLock);
-		scan = heap_beginscan_catalog(rel, 0, NULL);
+		scan = table_beginscan_catalog(rel, 0, NULL);
 		i = 0;
 		while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
 			++i;
-		heap_endscan(scan);
+		table_endscan(scan);
 		app = Typ = ALLOC(struct typmap *, i + 1);
 		while (i-- > 0)
 			*app++ = ALLOC(struct typmap, 1);
 		*app = NULL;
-		scan = heap_beginscan_catalog(rel, 0, NULL);
+		scan = table_beginscan_catalog(rel, 0, NULL);
 		app = Typ;
 		while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
 		{
@@ -957,7 +962,7 @@ gettype(char *type)
 					(char *) GETSTRUCT(tup),
 					sizeof((*app)->am_typ));
 		}
-		heap_endscan(scan);
+		table_endscan(scan);
 		table_close(rel, NoLock);
 		return gettype(type);
 	}

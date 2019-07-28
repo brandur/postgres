@@ -102,17 +102,17 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static bool SyncRepGetSyncRecPtr(XLogRecPtr *writePtr,
-					 XLogRecPtr *flushPtr,
-					 XLogRecPtr *applyPtr,
-					 bool *am_sync);
+								 XLogRecPtr *flushPtr,
+								 XLogRecPtr *applyPtr,
+								 bool *am_sync);
 static void SyncRepGetOldestSyncRecPtr(XLogRecPtr *writePtr,
-						   XLogRecPtr *flushPtr,
-						   XLogRecPtr *applyPtr,
-						   List *sync_standbys);
+									   XLogRecPtr *flushPtr,
+									   XLogRecPtr *applyPtr,
+									   List *sync_standbys);
 static void SyncRepGetNthLatestSyncRecPtr(XLogRecPtr *writePtr,
-							  XLogRecPtr *flushPtr,
-							  XLogRecPtr *applyPtr,
-							  List *sync_standbys, uint8 nth);
+										  XLogRecPtr *flushPtr,
+										  XLogRecPtr *applyPtr,
+										  List *sync_standbys, uint8 nth);
 static int	SyncRepGetStandbyPriority(void);
 static List *SyncRepGetSyncStandbysPriority(bool *am_sync);
 static List *SyncRepGetSyncStandbysQuorum(bool *am_sync);
@@ -276,9 +276,8 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 					   WAIT_EVENT_SYNC_REP);
 
 		/*
-		 * If the postmaster dies, we'll probably never get an
-		 * acknowledgment, because all the wal sender processes will exit. So
-		 * just bail out.
+		 * If the postmaster dies, we'll probably never get an acknowledgment,
+		 * because all the wal sender processes will exit. So just bail out.
 		 */
 		if (rc & WL_POSTMASTER_DEATH)
 		{
@@ -888,17 +887,13 @@ SyncRepGetSyncStandbysPriority(bool *am_sync)
 	while (priority <= lowest_priority)
 	{
 		ListCell   *cell;
-		ListCell   *prev = NULL;
-		ListCell   *next;
 
 		next_highest_priority = lowest_priority + 1;
 
-		for (cell = list_head(pending); cell != NULL; cell = next)
+		foreach(cell, pending)
 		{
 			i = lfirst_int(cell);
 			walsnd = &WalSndCtl->walsnds[i];
-
-			next = lnext(cell);
 
 			this_priority = walsnd->sync_standby_priority;
 			if (this_priority == priority)
@@ -922,15 +917,13 @@ SyncRepGetSyncStandbysPriority(bool *am_sync)
 				 * Remove the entry for this sync standby from the list to
 				 * prevent us from looking at the same entry again.
 				 */
-				pending = list_delete_cell(pending, cell, prev);
+				pending = foreach_delete_current(pending, cell);
 
-				continue;
+				continue;		/* don't adjust next_highest_priority */
 			}
 
 			if (this_priority < next_highest_priority)
 				next_highest_priority = this_priority;
-
-			prev = cell;
 		}
 
 		priority = next_highest_priority;

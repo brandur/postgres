@@ -18,9 +18,9 @@
 #include "miscadmin.h"
 
 #include "access/genam.h"
-#include "access/hash.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 
 #include "catalog/catalog.h"
@@ -91,16 +91,23 @@ check_publication_add_relation(Relation targetrel)
  * Does same checks as the above, but does not need relation to be opened
  * and also does not throw errors.
  *
- * Note this also excludes all tables with relid < FirstNormalObjectId,
+ * XXX  This also excludes all tables with relid < FirstNormalObjectId,
  * ie all tables created during initdb.  This mainly affects the preinstalled
- * information_schema.  (IsCatalogClass() only checks for these inside
- * pg_catalog and toast schemas.)
+ * information_schema.  IsCatalogRelationOid() only excludes tables with
+ * relid < FirstBootstrapObjectId, making that test rather redundant,
+ * but really we should get rid of the FirstNormalObjectId test not
+ * IsCatalogRelationOid.  We can't do so today because we don't want
+ * information_schema tables to be considered publishable; but this test
+ * is really inadequate for that, since the information_schema could be
+ * dropped and reloaded and then it'll be considered publishable.  The best
+ * long-term solution may be to add a "relispublishable" bool to pg_class,
+ * and depend on that instead of OID checks.
  */
 static bool
 is_publishable_class(Oid relid, Form_pg_class reltuple)
 {
 	return reltuple->relkind == RELKIND_RELATION &&
-		!IsCatalogClass(relid, reltuple) &&
+		!IsCatalogRelationOid(relid) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
 		relid >= FirstNormalObjectId;
 }
@@ -130,7 +137,7 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 	bool		result;
 
 	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
-	if (!tuple)
+	if (!HeapTupleIsValid(tuple))
 		PG_RETURN_NULL();
 	result = is_publishable_class(relid, (Form_pg_class) GETSTRUCT(tuple));
 	ReleaseSysCache(tuple);
@@ -310,7 +317,7 @@ GetAllTablesPublications(void)
 	result = NIL;
 	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
-		Oid		oid = ((Form_pg_publication) GETSTRUCT(tup))->oid;
+		Oid			oid = ((Form_pg_publication) GETSTRUCT(tup))->oid;
 
 		result = lappend_oid(result, oid);
 	}
@@ -329,7 +336,7 @@ GetAllTablesPublicationRelations(void)
 {
 	Relation	classRel;
 	ScanKeyData key[1];
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tuple;
 	List	   *result = NIL;
 
@@ -340,7 +347,7 @@ GetAllTablesPublicationRelations(void)
 				BTEqualStrategyNumber, F_CHAREQ,
 				CharGetDatum(RELKIND_RELATION));
 
-	scan = heap_beginscan_catalog(classRel, 1, key);
+	scan = table_beginscan_catalog(classRel, 1, key);
 
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
@@ -351,7 +358,7 @@ GetAllTablesPublicationRelations(void)
 			result = lappend_oid(result, relid);
 	}
 
-	heap_endscan(scan);
+	table_endscan(scan);
 	table_close(classRel, AccessShareLock);
 
 	return result;
@@ -474,7 +481,6 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 	char	   *pubname = text_to_cstring(PG_GETARG_TEXT_PP(0));
 	Publication *publication;
 	List	   *tables;
-	ListCell  **lcp;
 
 	/* stuff done only on the first call of the function */
 	if (SRF_IS_FIRSTCALL())
@@ -492,22 +498,19 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 			tables = GetAllTablesPublicationRelations();
 		else
 			tables = GetPublicationRelations(publication->oid);
-		lcp = (ListCell **) palloc(sizeof(ListCell *));
-		*lcp = list_head(tables);
-		funcctx->user_fctx = (void *) lcp;
+		funcctx->user_fctx = (void *) tables;
 
 		MemoryContextSwitchTo(oldcontext);
 	}
 
 	/* stuff done on every call of the function */
 	funcctx = SRF_PERCALL_SETUP();
-	lcp = (ListCell **) funcctx->user_fctx;
+	tables = (List *) funcctx->user_fctx;
 
-	while (*lcp != NULL)
+	if (funcctx->call_cntr < list_length(tables))
 	{
-		Oid			relid = lfirst_oid(*lcp);
+		Oid			relid = list_nth_oid(tables, funcctx->call_cntr);
 
-		*lcp = lnext(*lcp);
 		SRF_RETURN_NEXT(funcctx, ObjectIdGetDatum(relid));
 	}
 

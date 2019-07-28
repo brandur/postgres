@@ -39,8 +39,8 @@ static int
 pairingheap_SpGistSearchItem_cmp(const pairingheap_node *a,
 								 const pairingheap_node *b, void *arg)
 {
-	const		SpGistSearchItem *sa = (const SpGistSearchItem *) a;
-	const		SpGistSearchItem *sb = (const SpGistSearchItem *) b;
+	const SpGistSearchItem *sa = (const SpGistSearchItem *) a;
+	const SpGistSearchItem *sb = (const SpGistSearchItem *) b;
 	SpGistScanOpaque so = (SpGistScanOpaque) arg;
 	int			i;
 
@@ -79,7 +79,7 @@ pairingheap_SpGistSearchItem_cmp(const pairingheap_node *a,
 }
 
 static void
-spgFreeSearchItem(SpGistScanOpaque so, SpGistSearchItem * item)
+spgFreeSearchItem(SpGistScanOpaque so, SpGistSearchItem *item)
 {
 	if (!so->state.attLeafType.attbyval &&
 		DatumGetPointer(item->value) != NULL)
@@ -97,7 +97,7 @@ spgFreeSearchItem(SpGistScanOpaque so, SpGistSearchItem * item)
  * Called in queue context
  */
 static void
-spgAddSearchItemToQueue(SpGistScanOpaque so, SpGistSearchItem * item)
+spgAddSearchItemToQueue(SpGistScanOpaque so, SpGistSearchItem *item)
 {
 	pairingheap_add(so->scanQueue, &item->phNode);
 }
@@ -146,11 +146,6 @@ resetSpGistScanOpaque(SpGistScanOpaque so)
 {
 	MemoryContext oldCtx;
 
-	/*
-	 * clear traversal context before proceeding to the next scan; this must
-	 * not happen before the freeScanStack above, else we get double-free
-	 * crashes.
-	 */
 	MemoryContextReset(so->traversalCxt);
 
 	oldCtx = MemoryContextSwitchTo(so->traversalCxt);
@@ -439,7 +434,7 @@ spgNewHeapItem(SpGistScanOpaque so, int level, ItemPointer heapPtr,
  *		the scan is not ordered AND the item satisfies the scankeys
  */
 static bool
-spgLeafTest(SpGistScanOpaque so, SpGistSearchItem * item,
+spgLeafTest(SpGistScanOpaque so, SpGistSearchItem *item,
 			SpGistLeafTuple leafTuple, bool isnull,
 			bool *reportedSome, storeRes_func storeRes)
 {
@@ -530,7 +525,7 @@ spgLeafTest(SpGistScanOpaque so, SpGistSearchItem * item,
 static void
 spgInitInnerConsistentIn(spgInnerConsistentIn *in,
 						 SpGistScanOpaque so,
-						 SpGistSearchItem * item,
+						 SpGistSearchItem *item,
 						 SpGistInnerTuple innerTuple)
 {
 	in->scankeys = so->keyData;
@@ -551,7 +546,7 @@ spgInitInnerConsistentIn(spgInnerConsistentIn *in,
 
 static SpGistSearchItem *
 spgMakeInnerItem(SpGistScanOpaque so,
-				 SpGistSearchItem * parentItem,
+				 SpGistSearchItem *parentItem,
 				 SpGistNodeTuple tuple,
 				 spgInnerConsistentOut *out, int i, bool isnull,
 				 double *distances)
@@ -585,7 +580,7 @@ spgMakeInnerItem(SpGistScanOpaque so,
 }
 
 static void
-spgInnerTest(SpGistScanOpaque so, SpGistSearchItem * item,
+spgInnerTest(SpGistScanOpaque so, SpGistSearchItem *item,
 			 SpGistInnerTuple innerTuple, bool isnull)
 {
 	MemoryContext oldCxt = MemoryContextSwitchTo(so->tempCxt);
@@ -648,7 +643,7 @@ spgInnerTest(SpGistScanOpaque so, SpGistSearchItem * item,
 				continue;
 
 			/*
-			 * Use infinity distances if innerConsistent() failed to return
+			 * Use infinity distances if innerConsistentFn() failed to return
 			 * them or if is a NULL item (their distances are really unused).
 			 */
 			distances = out.distances ? out.distances[i] : so->infDistances;
@@ -683,7 +678,7 @@ enum SpGistSpecialOffsetNumbers
 
 static OffsetNumber
 spgTestLeafTuple(SpGistScanOpaque so,
-				 SpGistSearchItem * item,
+				 SpGistSearchItem *item,
 				 Page page, OffsetNumber offset,
 				 bool isnull, bool isroot,
 				 bool *reportedSome,
@@ -927,7 +922,7 @@ spggettuple(IndexScanDesc scan, ScanDirection dir)
 		if (so->iPtr < so->nPtrs)
 		{
 			/* continuing to return reported tuples */
-			scan->xs_ctup.t_self = so->heapPtrs[so->iPtr];
+			scan->xs_heaptid = so->heapPtrs[so->iPtr];
 			scan->xs_recheck = so->recheck[so->iPtr];
 			scan->xs_hitup = so->reconTups[so->iPtr];
 

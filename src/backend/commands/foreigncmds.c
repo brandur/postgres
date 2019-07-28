@@ -120,11 +120,10 @@ transformGenericOptions(Oid catalogId,
 	{
 		DefElem    *od = lfirst(optcell);
 		ListCell   *cell;
-		ListCell   *prev = NULL;
 
 		/*
 		 * Find the element in resultOptions.  We need this for validation in
-		 * all cases.  Also identify the previous element.
+		 * all cases.
 		 */
 		foreach(cell, resultOptions)
 		{
@@ -132,8 +131,6 @@ transformGenericOptions(Oid catalogId,
 
 			if (strcmp(def->defname, od->defname) == 0)
 				break;
-			else
-				prev = cell;
 		}
 
 		/*
@@ -150,7 +147,7 @@ transformGenericOptions(Oid catalogId,
 							(errcode(ERRCODE_UNDEFINED_OBJECT),
 							 errmsg("option \"%s\" not found",
 									od->defname)));
-				resultOptions = list_delete_cell(resultOptions, cell, prev);
+				resultOptions = list_delete_cell(resultOptions, cell);
 				break;
 
 			case DEFELEM_SET:
@@ -1184,7 +1181,7 @@ CreateUserMapping(CreateUserMappingStmt *stmt)
 		{
 			ereport(NOTICE,
 					(errcode(ERRCODE_DUPLICATE_OBJECT),
-					 errmsg("user mapping for \"%s\" already exists for server %s, skipping",
+					 errmsg("user mapping for \"%s\" already exists for server \"%s\", skipping",
 							MappingUserName(useId),
 							stmt->servername)));
 
@@ -1194,7 +1191,7 @@ CreateUserMapping(CreateUserMappingStmt *stmt)
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_DUPLICATE_OBJECT),
-					 errmsg("user mapping for \"%s\" already exists for server %s",
+					 errmsg("user mapping for \"%s\" already exists for server \"%s\"",
 							MappingUserName(useId),
 							stmt->servername)));
 	}
@@ -1294,8 +1291,8 @@ AlterUserMapping(AlterUserMappingStmt *stmt)
 	if (!OidIsValid(umId))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
-				 errmsg("user mapping for \"%s\" does not exist for the server",
-						MappingUserName(useId))));
+				 errmsg("user mapping for \"%s\" does not exist for server \"%s\"",
+						MappingUserName(useId), stmt->servername)));
 
 	user_mapping_ddl_aclcheck(useId, srv->serverid, stmt->servername);
 
@@ -1396,7 +1393,9 @@ RemoveUserMapping(DropUserMappingStmt *stmt)
 					 errmsg("server \"%s\" does not exist",
 							stmt->servername)));
 		/* IF EXISTS, just note it */
-		ereport(NOTICE, (errmsg("server does not exist, skipping")));
+		ereport(NOTICE,
+				(errmsg("server \"%s\" does not exist, skipping",
+						stmt->servername)));
 		return InvalidOid;
 	}
 
@@ -1409,13 +1408,13 @@ RemoveUserMapping(DropUserMappingStmt *stmt)
 		if (!stmt->missing_ok)
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
-					 errmsg("user mapping for \"%s\" does not exist for the server",
-							MappingUserName(useId))));
+					 errmsg("user mapping for \"%s\" does not exist for server \"%s\"",
+							MappingUserName(useId), stmt->servername)));
 
 		/* IF EXISTS specified, just note it */
 		ereport(NOTICE,
-				(errmsg("user mapping for \"%s\" does not exist for the server, skipping",
-						MappingUserName(useId))));
+				(errmsg("user mapping for \"%s\" does not exist for server \"%s\", skipping",
+						MappingUserName(useId), stmt->servername)));
 		return InvalidOid;
 	}
 

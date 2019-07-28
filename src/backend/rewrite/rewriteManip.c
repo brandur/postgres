@@ -41,12 +41,12 @@ typedef struct
 } locate_windowfunc_context;
 
 static bool contain_aggs_of_level_walker(Node *node,
-							 contain_aggs_of_level_context *context);
+										 contain_aggs_of_level_context *context);
 static bool locate_agg_of_level_walker(Node *node,
-						   locate_agg_of_level_context *context);
+									   locate_agg_of_level_context *context);
 static bool contain_windowfuncs_walker(Node *node, void *context);
 static bool locate_windowfunc_walker(Node *node,
-						 locate_windowfunc_context *context);
+									 locate_windowfunc_context *context);
 static bool checkExprHasSubLink_walker(Node *node, void *context);
 static Relids offset_relid_set(Relids relids, int offset);
 static Relids adjust_relid_set(Relids relids, int oldrelid, int newrelid);
@@ -1015,7 +1015,7 @@ AddQual(Query *parsetree, Node *qual)
 				 errmsg("conditional UNION/INTERSECT/EXCEPT statements are not implemented")));
 	}
 
-	/* INTERSECT want's the original, but we need to copy - Jan */
+	/* INTERSECT wants the original, but we need to copy - Jan */
 	copy = copyObject(qual);
 
 	parsetree->jointree->quals = make_and_qual(parsetree->jointree->quals,
@@ -1208,7 +1208,7 @@ replace_rte_variables_mutator(Node *node,
  * a ConvertRowtypeExpr to map back to the rowtype expected by the expression.
  * (Therefore, to_rowtype had better be a child rowtype of the rowtype of the
  * RTE we're changing references to.)  Callers that don't provide to_rowtype
- * should report an error if *found_row_type is true; we don't do that here
+ * should report an error if *found_whole_row is true; we don't do that here
  * because we don't know exactly what wording for the error message would
  * be most appropriate.  The caller will be aware of the context.
  *

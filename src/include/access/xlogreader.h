@@ -25,6 +25,10 @@
 #ifndef XLOGREADER_H
 #define XLOGREADER_H
 
+#ifndef FRONTEND
+#include "access/transam.h"
+#endif
+
 #include "access/xlogrecord.h"
 
 typedef struct XLogReaderState XLogReaderState;
@@ -198,19 +202,19 @@ struct XLogReaderState
 
 /* Get a new XLogReader */
 extern XLogReaderState *XLogReaderAllocate(int wal_segment_size,
-				   XLogPageReadCB pagereadfunc,
-				   void *private_data);
+										   XLogPageReadCB pagereadfunc,
+										   void *private_data);
 
 /* Free an XLogReader */
 extern void XLogReaderFree(XLogReaderState *state);
 
 /* Read the next XLog record. Returns NULL on end-of-WAL or failure */
 extern struct XLogRecord *XLogReadRecord(XLogReaderState *state,
-			   XLogRecPtr recptr, char **errormsg);
+										 XLogRecPtr recptr, char **errormsg);
 
 /* Validate a page */
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
-							 XLogRecPtr recptr, char *phdr);
+										 XLogRecPtr recptr, char *phdr);
 
 /* Invalidate read state */
 extern void XLogReaderInvalReadState(XLogReaderState *state);
@@ -222,7 +226,7 @@ extern XLogRecPtr XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr);
 /* Functions for decoding an XLogRecord */
 
 extern bool DecodeXLogRecord(XLogReaderState *state, XLogRecord *record,
-				 char **errmsg);
+							 char **errmsg);
 
 #define XLogRecGetTotalLen(decoder) ((decoder)->decoded_record->xl_tot_len)
 #define XLogRecGetPrev(decoder) ((decoder)->decoded_record->xl_prev)
@@ -240,10 +244,14 @@ extern bool DecodeXLogRecord(XLogReaderState *state, XLogRecord *record,
 #define XLogRecBlockImageApply(decoder, block_id) \
 	((decoder)->blocks[block_id].apply_image)
 
+#ifndef FRONTEND
+extern FullTransactionId XLogRecGetFullXid(XLogReaderState *record);
+#endif
+
 extern bool RestoreBlockImage(XLogReaderState *recoder, uint8 block_id, char *dst);
 extern char *XLogRecGetBlockData(XLogReaderState *record, uint8 block_id, Size *len);
 extern bool XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
-				   RelFileNode *rnode, ForkNumber *forknum,
-				   BlockNumber *blknum);
+							   RelFileNode *rnode, ForkNumber *forknum,
+							   BlockNumber *blknum);
 
 #endif							/* XLOGREADER_H */

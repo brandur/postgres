@@ -57,28 +57,28 @@ typedef struct LastAttnumInfo
 
 static void ExecReadyExpr(ExprState *state);
 static void ExecInitExprRec(Expr *node, ExprState *state,
-				Datum *resv, bool *resnull);
+							Datum *resv, bool *resnull);
 static void ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args,
-			 Oid funcid, Oid inputcollid,
-			 ExprState *state);
+						 Oid funcid, Oid inputcollid,
+						 ExprState *state);
 static void ExecInitExprSlots(ExprState *state, Node *node);
 static void ExecPushExprSlots(ExprState *state, LastAttnumInfo *info);
 static bool get_last_attnums_walker(Node *node, LastAttnumInfo *info);
 static void ExecComputeSlotInfo(ExprState *state, ExprEvalStep *op);
 static void ExecInitWholeRowVar(ExprEvalStep *scratch, Var *variable,
-					ExprState *state);
+								ExprState *state);
 static void ExecInitSubscriptingRef(ExprEvalStep *scratch,
-						SubscriptingRef *sbsref,
-						ExprState *state,
-						Datum *resv, bool *resnull);
+									SubscriptingRef *sbsref,
+									ExprState *state,
+									Datum *resv, bool *resnull);
 static bool isAssignmentIndirectionExpr(Expr *expr);
 static void ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
-					   ExprState *state,
-					   Datum *resv, bool *resnull);
+								   ExprState *state,
+								   Datum *resv, bool *resnull);
 static void ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
-					  ExprEvalStep *scratch,
-					  FunctionCallInfo fcinfo, AggStatePerTrans pertrans,
-					  int transno, int setno, int setoff, bool ishash);
+								  ExprEvalStep *scratch,
+								  FunctionCallInfo fcinfo, AggStatePerTrans pertrans,
+								  int transno, int setno, int setoff, bool ishash);
 
 
 /*
@@ -786,7 +786,7 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				{
 					AggState   *aggstate = (AggState *) state->parent;
 
-					aggstate->aggs = lcons(astate, aggstate->aggs);
+					aggstate->aggs = lappend(aggstate->aggs, astate);
 					aggstate->numaggs++;
 				}
 				else
@@ -834,7 +834,7 @@ ExecInitExprRec(Expr *node, ExprState *state,
 					WindowAggState *winstate = (WindowAggState *) state->parent;
 					int			nfuncs;
 
-					winstate->funcs = lcons(wfstate, winstate->funcs);
+					winstate->funcs = lappend(winstate->funcs, wfstate);
 					nfuncs = ++winstate->numfuncs;
 					if (wfunc->winagg)
 						winstate->numaggs++;
@@ -1200,12 +1200,12 @@ ExecInitExprRec(Expr *node, ExprState *state,
 					 * field's values[]/nulls[] entries as both the caseval
 					 * source and the result address for this subexpression.
 					 * That's okay only because (1) both FieldStore and
-					 * ArrayRef evaluate their arg or refexpr inputs first,
-					 * and (2) any such CaseTestExpr is directly the arg or
-					 * refexpr input.  So any read of the caseval will occur
-					 * before there's a chance to overwrite it.  Also, if
-					 * multiple entries in the newvals/fieldnums lists target
-					 * the same field, they'll effectively be applied
+					 * SubscriptingRef evaluate their arg or refexpr inputs
+					 * first, and (2) any such CaseTestExpr is directly the
+					 * arg or refexpr input.  So any read of the caseval will
+					 * occur before there's a chance to overwrite it.  Also,
+					 * if multiple entries in the newvals/fieldnums lists
+					 * target the same field, they'll effectively be applied
 					 * left-to-right which is what we want.
 					 */
 					save_innermost_caseval = state->innermost_caseval;
@@ -1683,7 +1683,6 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						   *l_opfamily,
 						   *l_inputcollid;
 				ListCell   *lc;
-				int			off;
 
 				/*
 				 * Iterate over each field, prepare comparisons.  To handle
@@ -1695,20 +1694,11 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				Assert(list_length(rcexpr->opfamilies) == nopers);
 				Assert(list_length(rcexpr->inputcollids) == nopers);
 
-				off = 0;
-				for (off = 0,
-					 l_left_expr = list_head(rcexpr->largs),
-					 l_right_expr = list_head(rcexpr->rargs),
-					 l_opno = list_head(rcexpr->opnos),
-					 l_opfamily = list_head(rcexpr->opfamilies),
-					 l_inputcollid = list_head(rcexpr->inputcollids);
-					 off < nopers;
-					 off++,
-					 l_left_expr = lnext(l_left_expr),
-					 l_right_expr = lnext(l_right_expr),
-					 l_opno = lnext(l_opno),
-					 l_opfamily = lnext(l_opfamily),
-					 l_inputcollid = lnext(l_inputcollid))
+				forfive(l_left_expr, rcexpr->largs,
+						l_right_expr, rcexpr->rargs,
+						l_opno, rcexpr->opnos,
+						l_opfamily, rcexpr->opfamilies,
+						l_inputcollid, rcexpr->inputcollids)
 				{
 					Expr	   *left_expr = (Expr *) lfirst(l_left_expr);
 					Expr	   *right_expr = (Expr *) lfirst(l_right_expr);
@@ -2371,16 +2361,16 @@ get_last_attnums_walker(Node *node, LastAttnumInfo *info)
  * Compute additional information for EEOP_*_FETCHSOME ops.
  *
  * The goal is to determine whether a slot is 'fixed', that is, every
- * evaluation of the the expression will have the same type of slot, with an
+ * evaluation of the expression will have the same type of slot, with an
  * equivalent descriptor.
  */
 static void
 ExecComputeSlotInfo(ExprState *state, ExprEvalStep *op)
 {
-	PlanState *parent = state->parent;
+	PlanState  *parent = state->parent;
 	TupleDesc	desc = NULL;
 	const TupleTableSlotOps *tts_ops = NULL;
-	bool isfixed = false;
+	bool		isfixed = false;
 
 	if (op->d.fetch.known_desc != NULL)
 	{
@@ -3323,10 +3313,11 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
  */
 ExprState *
 ExecBuildGroupingEqual(TupleDesc ldesc, TupleDesc rdesc,
-					   const TupleTableSlotOps * lops, const TupleTableSlotOps * rops,
+					   const TupleTableSlotOps *lops, const TupleTableSlotOps *rops,
 					   int numCols,
 					   const AttrNumber *keyColIdx,
 					   const Oid *eqfunctions,
+					   const Oid *collations,
 					   PlanState *parent)
 {
 	ExprState  *state = makeNode(ExprState);
@@ -3387,6 +3378,7 @@ ExecBuildGroupingEqual(TupleDesc ldesc, TupleDesc rdesc,
 		Form_pg_attribute latt = TupleDescAttr(ldesc, attno - 1);
 		Form_pg_attribute ratt = TupleDescAttr(rdesc, attno - 1);
 		Oid			foid = eqfunctions[natt];
+		Oid			collid = collations[natt];
 		FmgrInfo   *finfo;
 		FunctionCallInfo fcinfo;
 		AclResult	aclresult;
@@ -3404,7 +3396,7 @@ ExecBuildGroupingEqual(TupleDesc ldesc, TupleDesc rdesc,
 		fmgr_info(foid, finfo);
 		fmgr_info_set_expr(NULL, finfo);
 		InitFunctionCallInfoData(*fcinfo, finfo, 2,
-								 InvalidOid, NULL, NULL);
+								 collid, NULL, NULL);
 
 		/* left arg */
 		scratch.opcode = EEOP_INNER_VAR;

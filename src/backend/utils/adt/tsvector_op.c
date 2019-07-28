@@ -65,8 +65,6 @@ typedef struct
 	StatEntry  *root;
 } TSVectorStat;
 
-#define STATHDRSIZE (offsetof(TSVectorStat, data))
-
 static Datum tsvector_update_trigger(PG_FUNCTION_ARGS, bool config_column);
 static int	tsvector_bsearch(const TSVector tsv, char *lexeme, int lexeme_len);
 
@@ -1154,7 +1152,7 @@ tsvector_concat(PG_FUNCTION_ARGS)
 /*
  * Compare two strings by tsvector rules.
  *
- * if isPrefix = true then it returns zero value iff b has prefix a
+ * if prefix = true then it returns zero value iff b has prefix a
  */
 int32
 tsCompareString(char *a, int lena, char *b, int lenb, bool prefix)

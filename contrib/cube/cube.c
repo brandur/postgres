@@ -100,7 +100,7 @@ bool		g_cube_leaf_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
 bool		g_cube_internal_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
 
 /*
-** Auxiliary funxtions
+** Auxiliary functions
 */
 static double distance_1D(double a1, double a2, double b1, double b2);
 static bool cube_is_point_internal(NDBOX *cube);
@@ -156,7 +156,7 @@ cube_a_f8_f8(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("can't extend cube"),
 				 errdetail("A cube cannot have more than %d dimensions.",
-							   CUBE_MAX_DIM)));
+						   CUBE_MAX_DIM)));
 
 	if (ARRNELEMS(ll) != dim)
 		ereport(ERROR,
@@ -220,7 +220,7 @@ cube_a_f8(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("array is too long"),
 				 errdetail("A cube cannot have more than %d dimensions.",
-							   CUBE_MAX_DIM)));
+						   CUBE_MAX_DIM)));
 
 	dur = ARRPTR(ur);
 
@@ -260,7 +260,7 @@ cube_subset(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("array is too long"),
 				 errdetail("A cube cannot have more than %d dimensions.",
-							   CUBE_MAX_DIM)));
+						   CUBE_MAX_DIM)));
 
 	size = IS_POINT(c) ? POINT_SIZE(dim) : CUBE_SIZE(dim);
 	result = (NDBOX *) palloc0(size);
@@ -590,7 +590,7 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 			v->spl_nright++;
 		}
 	}
-	*left = *right = FirstOffsetNumber; /* sentinel value, see dosplit() */
+	*left = *right = FirstOffsetNumber; /* sentinel value */
 
 	v->spl_ldatum = PointerGetDatum(datum_l);
 	v->spl_rdatum = PointerGetDatum(datum_r);
@@ -1780,7 +1780,7 @@ cube_c_f8(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("can't extend cube"),
 				 errdetail("A cube cannot have more than %d dimensions.",
-							   CUBE_MAX_DIM)));
+						   CUBE_MAX_DIM)));
 
 	if (IS_POINT(cube))
 	{
@@ -1828,7 +1828,7 @@ cube_c_f8_f8(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("can't extend cube"),
 				 errdetail("A cube cannot have more than %d dimensions.",
-							   CUBE_MAX_DIM)));
+						   CUBE_MAX_DIM)));
 
 	if (IS_POINT(cube) && (x1 == x2))
 	{

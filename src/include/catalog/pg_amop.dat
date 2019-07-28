@@ -1081,6 +1081,9 @@
   amopstrategy => '13', amopopr => '~(box,box)', amopmethod => 'gist' },
 { amopfamily => 'gist/box_ops', amoplefttype => 'box', amoprighttype => 'box',
   amopstrategy => '14', amopopr => '@(box,box)', amopmethod => 'gist' },
+{ amopfamily => 'gist/box_ops', amoplefttype => 'box', amoprighttype => 'point',
+  amopstrategy => '15', amoppurpose => 'o', amopopr => '<->(box,point)',
+  amopmethod => 'gist', amopsortfamily => 'btree/float_ops' },
 
 # gist point_ops
 { amopfamily => 'gist/point_ops', amoplefttype => 'point',
@@ -1468,11 +1471,23 @@
 { amopfamily => 'gin/jsonb_ops', amoplefttype => 'jsonb',
   amoprighttype => '_text', amopstrategy => '11', amopopr => '?&(jsonb,_text)',
   amopmethod => 'gin' },
+{ amopfamily => 'gin/jsonb_ops', amoplefttype => 'jsonb',
+  amoprighttype => 'jsonpath', amopstrategy => '15',
+  amopopr => '@?(jsonb,jsonpath)', amopmethod => 'gin' },
+{ amopfamily => 'gin/jsonb_ops', amoplefttype => 'jsonb',
+  amoprighttype => 'jsonpath', amopstrategy => '16',
+  amopopr => '@@(jsonb,jsonpath)', amopmethod => 'gin' },
 
 # GIN jsonb_path_ops
 { amopfamily => 'gin/jsonb_path_ops', amoplefttype => 'jsonb',
   amoprighttype => 'jsonb', amopstrategy => '7', amopopr => '@>(jsonb,jsonb)',
   amopmethod => 'gin' },
+{ amopfamily => 'gin/jsonb_path_ops', amoplefttype => 'jsonb',
+  amoprighttype => 'jsonpath', amopstrategy => '15',
+  amopopr => '@?(jsonb,jsonpath)', amopmethod => 'gin' },
+{ amopfamily => 'gin/jsonb_path_ops', amoplefttype => 'jsonb',
+  amoprighttype => 'jsonpath', amopstrategy => '16',
+  amopopr => '@@(jsonb,jsonpath)', amopmethod => 'gin' },
 
 # SP-GiST range_ops
 { amopfamily => 'spgist/range_ops', amoplefttype => 'anyrange',
@@ -1531,6 +1546,10 @@
   amopstrategy => '11', amopopr => '|>>(box,box)', amopmethod => 'spgist' },
 { amopfamily => 'spgist/box_ops', amoplefttype => 'box', amoprighttype => 'box',
   amopstrategy => '12', amopopr => '|&>(box,box)', amopmethod => 'spgist' },
+{ amopfamily => 'spgist/box_ops', amoplefttype => 'box',
+  amoprighttype => 'point', amopstrategy => '15', amoppurpose => 'o',
+  amopopr => '<->(box,point)', amopmethod => 'spgist',
+  amopsortfamily => 'btree/float_ops' },
 
 # SP-GiST poly_ops (supports polygons)
 { amopfamily => 'spgist/poly_ops', amoplefttype => 'polygon',

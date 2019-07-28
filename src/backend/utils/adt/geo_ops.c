@@ -88,7 +88,7 @@ static int	point_inside(Point *p, int npts, Point *plist);
 static inline void line_construct(LINE *result, Point *pt, float8 m);
 static inline float8 line_sl(LINE *line);
 static inline float8 line_invsl(LINE *line);
-static bool	line_interpt_line(Point *result, LINE *l1, LINE *l2);
+static bool line_interpt_line(Point *result, LINE *l1, LINE *l2);
 static bool line_contain_point(LINE *line, Point *point);
 static float8 line_closept_point(Point *result, LINE *line, Point *pt);
 
@@ -96,10 +96,10 @@ static float8 line_closept_point(Point *result, LINE *line, Point *pt);
 static inline void statlseg_construct(LSEG *lseg, Point *pt1, Point *pt2);
 static inline float8 lseg_sl(LSEG *lseg);
 static inline float8 lseg_invsl(LSEG *lseg);
-static bool	lseg_interpt_line(Point *result, LSEG *lseg, LINE *line);
-static bool	lseg_interpt_lseg(Point *result, LSEG *l1, LSEG *l2);
+static bool lseg_interpt_line(Point *result, LSEG *lseg, LINE *line);
+static bool lseg_interpt_lseg(Point *result, LSEG *l1, LSEG *l2);
 static int	lseg_crossing(float8 x, float8 y, float8 px, float8 py);
-static bool	lseg_contain_point(LSEG *lseg, Point *point);
+static bool lseg_contain_point(LSEG *lseg, Point *point);
 static float8 lseg_closept_point(Point *result, LSEG *lseg, Point *pt);
 static float8 lseg_closept_line(Point *result, LSEG *lseg, LINE *line);
 static float8 lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg);
@@ -131,15 +131,15 @@ static float8 dist_ppoly_internal(Point *pt, POLYGON *poly);
 
 /* Routines for encoding and decoding */
 static float8 single_decode(char *num, char **endptr_p,
-			  const char *type_name, const char *orig_string);
+							const char *type_name, const char *orig_string);
 static void single_encode(float8 x, StringInfo str);
 static void pair_decode(char *str, float8 *x, float8 *y, char **endptr_p,
-			const char *type_name, const char *orig_string);
+						const char *type_name, const char *orig_string);
 static void pair_encode(float8 x, float8 y, StringInfo str);
 static int	pair_count(char *s, char delim);
 static void path_decode(char *str, bool opentype, int npts, Point *p,
-			bool *isopen, char **endptr_p,
-			const char *type_name, const char *orig_string);
+						bool *isopen, char **endptr_p,
+						const char *type_name, const char *orig_string);
 static char *path_encode(enum path_delim path_delim, int npts, Point *pt);
 
 
@@ -692,9 +692,9 @@ static bool
 box_contain_box(BOX *contains_box, BOX *contained_box)
 {
 	return FPge(contains_box->high.x, contained_box->high.x) &&
-		   FPle(contains_box->low.x, contained_box->low.x) &&
-		   FPge(contains_box->high.y, contained_box->high.y) &&
-		   FPle(contains_box->low.y, contained_box->low.y);
+		FPle(contains_box->low.x, contained_box->low.x) &&
+		FPge(contains_box->high.y, contained_box->high.y) &&
+		FPle(contains_box->low.y, contained_box->low.y);
 }
 
 
@@ -2348,6 +2348,17 @@ dist_pl(PG_FUNCTION_ARGS)
 	PG_RETURN_FLOAT8(line_closept_point(NULL, line, pt));
 }
 
+/*
+ * Distance from a line to a point
+ */
+Datum
+dist_lp(PG_FUNCTION_ARGS)
+{
+	LINE	   *line = PG_GETARG_LINE_P(0);
+	Point	   *pt = PG_GETARG_POINT_P(1);
+
+	PG_RETURN_FLOAT8(line_closept_point(NULL, line, pt));
+}
 
 /*
  * Distance from a point to a lseg
@@ -2362,13 +2373,20 @@ dist_ps(PG_FUNCTION_ARGS)
 }
 
 /*
- * Distance from a point to a path
+ * Distance from a lseg to a point
  */
 Datum
-dist_ppath(PG_FUNCTION_ARGS)
+dist_sp(PG_FUNCTION_ARGS)
 {
-	Point	   *pt = PG_GETARG_POINT_P(0);
-	PATH	   *path = PG_GETARG_PATH_P(1);
+	LSEG	   *lseg = PG_GETARG_LSEG_P(0);
+	Point	   *pt = PG_GETARG_POINT_P(1);
+
+	PG_RETURN_FLOAT8(lseg_closept_point(NULL, lseg, pt));
+}
+
+static float8
+dist_ppath_internal(Point *pt, PATH *path)
+{
 	float8		result = 0.0;	/* keep compiler quiet */
 	bool		have_min = false;
 	float8		tmp;
@@ -2378,8 +2396,8 @@ dist_ppath(PG_FUNCTION_ARGS)
 	Assert(path->npts > 0);
 
 	/*
-	 * The distance from a point to a path is the smallest distance
-	 * from the point to any of its constituent segments.
+	 * The distance from a point to a path is the smallest distance from the
+	 * point to any of its constituent segments.
 	 */
 	for (i = 0; i < path->npts; i++)
 	{
@@ -2403,7 +2421,31 @@ dist_ppath(PG_FUNCTION_ARGS)
 		}
 	}
 
-	PG_RETURN_FLOAT8(result);
+	return result;
+}
+
+/*
+ * Distance from a point to a path
+ */
+Datum
+dist_ppath(PG_FUNCTION_ARGS)
+{
+	Point	   *pt = PG_GETARG_POINT_P(0);
+	PATH	   *path = PG_GETARG_PATH_P(1);
+
+	PG_RETURN_FLOAT8(dist_ppath_internal(pt, path));
+}
+
+/*
+ * Distance from a path to a point
+ */
+Datum
+dist_pathp(PG_FUNCTION_ARGS)
+{
+	PATH	   *path = PG_GETARG_PATH_P(0);
+	Point	   *pt = PG_GETARG_POINT_P(1);
+
+	PG_RETURN_FLOAT8(dist_ppath_internal(pt, path));
 }
 
 /*
@@ -2414,6 +2456,18 @@ dist_pb(PG_FUNCTION_ARGS)
 {
 	Point	   *pt = PG_GETARG_POINT_P(0);
 	BOX		   *box = PG_GETARG_BOX_P(1);
+
+	PG_RETURN_FLOAT8(box_closept_point(NULL, box, pt));
+}
+
+/*
+ * Distance from a box to a point
+ */
+Datum
+dist_bp(PG_FUNCTION_ARGS)
+{
+	BOX		   *box = PG_GETARG_BOX_P(0);
+	Point	   *pt = PG_GETARG_POINT_P(1);
 
 	PG_RETURN_FLOAT8(box_closept_point(NULL, box, pt));
 }
@@ -2431,6 +2485,18 @@ dist_sl(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Distance from a line to a lseg
+ */
+Datum
+dist_ls(PG_FUNCTION_ARGS)
+{
+	LINE	   *line = PG_GETARG_LINE_P(0);
+	LSEG	   *lseg = PG_GETARG_LSEG_P(1);
+
+	PG_RETURN_FLOAT8(lseg_closept_line(NULL, lseg, line));
+}
+
+/*
  * Distance from a lseg to a box
  */
 Datum
@@ -2438,6 +2504,18 @@ dist_sb(PG_FUNCTION_ARGS)
 {
 	LSEG	   *lseg = PG_GETARG_LSEG_P(0);
 	BOX		   *box = PG_GETARG_BOX_P(1);
+
+	PG_RETURN_FLOAT8(box_closept_lseg(NULL, box, lseg));
+}
+
+/*
+ * Distance from a box to a lseg
+ */
+Datum
+dist_bs(PG_FUNCTION_ARGS)
+{
+	BOX		   *box = PG_GETARG_BOX_P(0);
+	LSEG	   *lseg = PG_GETARG_LSEG_P(1);
 
 	PG_RETURN_FLOAT8(box_closept_lseg(NULL, box, lseg));
 }
@@ -2462,13 +2540,27 @@ dist_lb(PG_FUNCTION_ARGS)
 }
 
 /*
- * Distance from a circle to a polygon
+ * Distance from a box to a line
  */
 Datum
-dist_cpoly(PG_FUNCTION_ARGS)
+dist_bl(PG_FUNCTION_ARGS)
 {
-	CIRCLE	   *circle = PG_GETARG_CIRCLE_P(0);
-	POLYGON    *poly = PG_GETARG_POLYGON_P(1);
+#ifdef NOT_USED
+	BOX		   *box = PG_GETARG_BOX_P(0);
+	LINE	   *line = PG_GETARG_LINE_P(1);
+#endif
+
+	/* need to think about this one for a while */
+	ereport(ERROR,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("function \"dist_bl\" not implemented")));
+
+	PG_RETURN_NULL();
+}
+
+static float8
+dist_cpoly_internal(CIRCLE *circle, POLYGON *poly)
+{
 	float8		result;
 
 	/* calculate distance to center, and subtract radius */
@@ -2477,7 +2569,31 @@ dist_cpoly(PG_FUNCTION_ARGS)
 	if (result < 0.0)
 		result = 0.0;
 
-	PG_RETURN_FLOAT8(result);
+	return result;
+}
+
+/*
+ * Distance from a circle to a polygon
+ */
+Datum
+dist_cpoly(PG_FUNCTION_ARGS)
+{
+	CIRCLE	   *circle = PG_GETARG_CIRCLE_P(0);
+	POLYGON    *poly = PG_GETARG_POLYGON_P(1);
+
+	PG_RETURN_FLOAT8(dist_cpoly_internal(circle, poly));
+}
+
+/*
+ * Distance from a polygon to a circle
+ */
+Datum
+dist_polyc(PG_FUNCTION_ARGS)
+{
+	POLYGON    *poly = PG_GETARG_POLYGON_P(0);
+	CIRCLE	   *circle = PG_GETARG_CIRCLE_P(1);
+
+	PG_RETURN_FLOAT8(dist_cpoly_internal(circle, poly));
 }
 
 /*
@@ -2553,9 +2669,9 @@ lseg_interpt_line(Point *result, LSEG *lseg, LINE *line)
 	LINE		tmp;
 
 	/*
-	 * First, we promote the line segment to a line, because we know how
-	 * to find the intersection point of two lines.  If they don't have
-	 * an intersection point, we are done.
+	 * First, we promote the line segment to a line, because we know how to
+	 * find the intersection point of two lines.  If they don't have an
+	 * intersection point, we are done.
 	 */
 	line_construct(&tmp, &lseg->p[0], lseg_sl(lseg));
 	if (!line_interpt_line(&interpt, &tmp, line))
@@ -2602,8 +2718,8 @@ line_closept_point(Point *result, LINE *line, Point *point)
 	LINE		tmp;
 
 	/*
-	 * We drop a perpendicular to find the intersection point.  Ordinarily
-	 * we should always find it, but that can fail in the presence of NaN
+	 * We drop a perpendicular to find the intersection point.  Ordinarily we
+	 * should always find it, but that can fail in the presence of NaN
 	 * coordinates, and perhaps even from simple roundoff issues.
 	 */
 	line_construct(&tmp, point, line_invsl(line));
@@ -2693,8 +2809,8 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 		return 0.0;
 
 	/*
-	 * Then, we find the closest points from the endpoints of the second
-	 * line segment, and keep the closest one.
+	 * Then, we find the closest points from the endpoints of the second line
+	 * segment, and keep the closest one.
 	 */
 	dist = lseg_closept_point(result, on_lseg, &to_lseg->p[0]);
 	d = lseg_closept_point(&point, on_lseg, &to_lseg->p[1]);
@@ -3063,7 +3179,7 @@ static bool
 box_contain_point(BOX *box, Point *point)
 {
 	return box->high.x >= point->x && box->low.x <= point->x &&
-		   box->high.y >= point->y && box->low.y <= point-> y;
+		box->high.y >= point->y && box->low.y <= point->y;
 }
 
 Datum
@@ -3150,7 +3266,7 @@ static bool
 box_contain_lseg(BOX *box, LSEG *lseg)
 {
 	return box_contain_point(box, &lseg->p[0]) &&
-		   box_contain_point(box, &lseg->p[1]);
+		box_contain_point(box, &lseg->p[1]);
 }
 
 Datum
@@ -5315,7 +5431,7 @@ lseg_crossing(float8 x, float8 y, float8 prev_x, float8 prev_y)
 				/* both non-positive so do not cross positive X-axis */
 				return 0;
 
-			/* x and y cross axises, see URL above point_inside() */
+			/* x and y cross axes, see URL above point_inside() */
 			z = float8_mi(float8_mul(float8_mi(x, prev_x), y),
 						  float8_mul(float8_mi(y, prev_y), x));
 			if (FPzero(z))

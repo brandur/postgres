@@ -195,14 +195,14 @@ typedef struct xl_multi_insert_tuple
  *
  * Backup blk 0: new page
  *
- * If XLOG_HEAP_PREFIX_FROM_OLD or XLOG_HEAP_SUFFIX_FROM_OLD flags are set,
+ * If XLH_UPDATE_PREFIX_FROM_OLD or XLH_UPDATE_SUFFIX_FROM_OLD flags are set,
  * the prefix and/or suffix come first, as one or two uint16s.
  *
  * After that, xl_heap_header and new tuple data follow.  The new tuple
  * data doesn't include the prefix and suffix, which are copied from the
  * old tuple on replay.
  *
- * If HEAP_CONTAINS_NEW_TUPLE_DATA flag is given, the tuple data is
+ * If XLH_UPDATE_CONTAINS_NEW_TUPLE flag is given, the tuple data is
  * included even if a full-page image was taken.
  *
  * Backup blk 1: old page, if different. (no data, just a reference to the blk)
@@ -217,8 +217,8 @@ typedef struct xl_heap_update
 	OffsetNumber new_offnum;	/* new tuple's offset */
 
 	/*
-	 * If XLOG_HEAP_CONTAINS_OLD_TUPLE or XLOG_HEAP_CONTAINS_OLD_KEY flags are
-	 * set, a xl_heap_header struct and tuple data for the old tuple follows.
+	 * If XLH_UPDATE_CONTAINS_OLD_TUPLE or XLH_UPDATE_CONTAINS_OLD_KEY flags
+	 * are set, xl_heap_header and tuple data for the old tuple follow.
 	 */
 } xl_heap_update;
 
@@ -384,7 +384,7 @@ typedef struct xl_heap_rewrite_mapping
 } xl_heap_rewrite_mapping;
 
 extern void HeapTupleHeaderAdvanceLatestRemovedXid(HeapTupleHeader tuple,
-									   TransactionId *latestRemovedXid);
+												   TransactionId *latestRemovedXid);
 
 extern void heap_redo(XLogReaderState *record);
 extern void heap_desc(StringInfo buf, XLogReaderState *record);
@@ -396,25 +396,25 @@ extern const char *heap2_identify(uint8 info);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
 
 extern XLogRecPtr log_heap_cleanup_info(RelFileNode rnode,
-					  TransactionId latestRemovedXid);
+										TransactionId latestRemovedXid);
 extern XLogRecPtr log_heap_clean(Relation reln, Buffer buffer,
-			   OffsetNumber *redirected, int nredirected,
-			   OffsetNumber *nowdead, int ndead,
-			   OffsetNumber *nowunused, int nunused,
-			   TransactionId latestRemovedXid);
+								 OffsetNumber *redirected, int nredirected,
+								 OffsetNumber *nowdead, int ndead,
+								 OffsetNumber *nowunused, int nunused,
+								 TransactionId latestRemovedXid);
 extern XLogRecPtr log_heap_freeze(Relation reln, Buffer buffer,
-				TransactionId cutoff_xid, xl_heap_freeze_tuple *tuples,
-				int ntuples);
+								  TransactionId cutoff_xid, xl_heap_freeze_tuple *tuples,
+								  int ntuples);
 extern bool heap_prepare_freeze_tuple(HeapTupleHeader tuple,
-						  TransactionId relfrozenxid,
-						  TransactionId relminmxid,
-						  TransactionId cutoff_xid,
-						  TransactionId cutoff_multi,
-						  xl_heap_freeze_tuple *frz,
-						  bool *totally_frozen);
+									  TransactionId relfrozenxid,
+									  TransactionId relminmxid,
+									  TransactionId cutoff_xid,
+									  TransactionId cutoff_multi,
+									  xl_heap_freeze_tuple *frz,
+									  bool *totally_frozen);
 extern void heap_execute_freeze_tuple(HeapTupleHeader tuple,
-						  xl_heap_freeze_tuple *xlrec_tp);
+									  xl_heap_freeze_tuple *xlrec_tp);
 extern XLogRecPtr log_heap_visible(RelFileNode rnode, Buffer heap_buffer,
-				 Buffer vm_buffer, TransactionId cutoff_xid, uint8 flags);
+								   Buffer vm_buffer, TransactionId cutoff_xid, uint8 flags);
 
 #endif							/* HEAPAM_XLOG_H */

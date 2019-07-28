@@ -26,12 +26,12 @@ typedef struct
 
 extern bool contain_agg_clause(Node *clause);
 extern void get_agg_clause_costs(PlannerInfo *root, Node *clause,
-					 AggSplit aggsplit, AggClauseCosts *costs);
+								 AggSplit aggsplit, AggClauseCosts *costs);
 
 extern bool contain_window_function(Node *clause);
 extern WindowFuncLists *find_window_functions(Node *clause, Index maxWinRef);
 
-extern double expression_returns_set_rows(Node *clause);
+extern double expression_returns_set_rows(PlannerInfo *root, Node *clause);
 
 extern bool contain_subplans(Node *clause);
 
@@ -51,9 +51,8 @@ extern bool is_pseudo_constant_clause_relids(Node *clause, Relids relids);
 extern int	NumRelids(Node *clause);
 
 extern void CommuteOpExpr(OpExpr *clause);
-extern void CommuteRowCompareExpr(RowCompareExpr *clause);
 
 extern Query *inline_set_returning_function(PlannerInfo *root,
-							  RangeTblEntry *rte);
+											RangeTblEntry *rte);
 
 #endif							/* CLAUSES_H */

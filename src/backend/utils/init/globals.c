@@ -39,7 +39,7 @@ volatile uint32 CritSectionCount = 0;
 
 int			MyProcPid;
 pg_time_t	MyStartTime;
-TimestampTz	MyStartTimestamp;
+TimestampTz MyStartTimestamp;
 struct Port *MyProcPort;
 int32		MyCancelKey;
 int			MyPMChildSlot;
@@ -138,7 +138,7 @@ int			VacuumCostPageHit = 1;	/* GUC parameters for vacuum */
 int			VacuumCostPageMiss = 10;
 int			VacuumCostPageDirty = 20;
 int			VacuumCostLimit = 200;
-int			VacuumCostDelay = 0;
+double		VacuumCostDelay = 0;
 
 int			VacuumPageHit = 0;
 int			VacuumPageMiss = 0;

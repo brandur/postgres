@@ -34,6 +34,7 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
@@ -86,7 +87,7 @@ typedef struct
 Oid			binary_upgrade_next_array_pg_type_oid = InvalidOid;
 
 static void makeRangeConstructors(const char *name, Oid namespace,
-					  Oid rangeOid, Oid subtype);
+								  Oid rangeOid, Oid subtype);
 static Oid	findTypeInputFunction(List *procname, Oid typeOid);
 static Oid	findTypeOutputFunction(List *procname, Oid typeOid);
 static Oid	findTypeReceiveFunction(List *procname, Oid typeOid);
@@ -101,11 +102,11 @@ static void validateDomainConstraint(Oid domainoid, char *ccbin);
 static List *get_rels_with_domain(Oid domainOid, LOCKMODE lockmode);
 static void checkEnumOwner(HeapTuple tup);
 static char *domainAddConstraint(Oid domainOid, Oid domainNamespace,
-					Oid baseTypeOid,
-					int typMod, Constraint *constr,
-					const char *domainName, ObjectAddress *constrAddr);
+								 Oid baseTypeOid,
+								 int typMod, Constraint *constr,
+								 const char *domainName, ObjectAddress *constrAddr);
 static Node *replace_domain_constraint_value(ParseState *pstate,
-								ColumnRef *cref);
+											 ColumnRef *cref);
 
 
 /*
@@ -917,7 +918,8 @@ DefineDomain(CreateDomainStmt *stmt)
 					defaultExpr = cookDefault(pstate, constr->raw_expr,
 											  basetypeoid,
 											  basetypeMod,
-											  domainName);
+											  domainName,
+											  0);
 
 					/*
 					 * If the expression is just a NULL constant, we treat it
@@ -1664,6 +1666,7 @@ makeRangeConstructors(const char *name, Oid namespace,
 								 NIL,	/* parameterDefaults */
 								 PointerGetDatum(NULL), /* trftypes */
 								 PointerGetDatum(NULL), /* proconfig */
+								 InvalidOid,	/* prosupport */
 								 1.0,	/* procost */
 								 0.0);	/* prorows */
 
@@ -2226,7 +2229,8 @@ AlterDomainDefault(List *names, Node *defaultRaw)
 		defaultExpr = cookDefault(pstate, defaultRaw,
 								  typTup->typbasetype,
 								  typTup->typtypmod,
-								  NameStr(typTup->typname));
+								  NameStr(typTup->typname),
+								  0);
 
 		/*
 		 * If the expression is just a NULL constant, we treat the command
@@ -2361,14 +2365,15 @@ AlterDomainNotNull(List *names, bool notNull)
 			RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 			Relation	testrel = rtc->rel;
 			TupleDesc	tupdesc = RelationGetDescr(testrel);
-			HeapScanDesc scan;
-			HeapTuple	tuple;
+			TupleTableSlot *slot;
+			TableScanDesc scan;
 			Snapshot	snapshot;
 
 			/* Scan all tuples in this relation */
 			snapshot = RegisterSnapshot(GetLatestSnapshot());
-			scan = heap_beginscan(testrel, snapshot, 0, NULL);
-			while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+			scan = table_beginscan(testrel, snapshot, 0, NULL);
+			slot = table_slot_create(testrel, NULL);
+			while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 			{
 				int			i;
 
@@ -2378,7 +2383,7 @@ AlterDomainNotNull(List *names, bool notNull)
 					int			attnum = rtc->atts[i];
 					Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
 
-					if (heap_attisnull(tuple, attnum, tupdesc))
+					if (slot_attisnull(slot, attnum))
 					{
 						/*
 						 * In principle the auxiliary information for this
@@ -2397,7 +2402,8 @@ AlterDomainNotNull(List *names, bool notNull)
 					}
 				}
 			}
-			heap_endscan(scan);
+			ExecDropSingleTupleTableSlot(slot);
+			table_endscan(scan);
 			UnregisterSnapshot(snapshot);
 
 			/* Close each rel after processing, but keep lock */
@@ -2775,14 +2781,15 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 		RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 		Relation	testrel = rtc->rel;
 		TupleDesc	tupdesc = RelationGetDescr(testrel);
-		HeapScanDesc scan;
-		HeapTuple	tuple;
+		TupleTableSlot *slot;
+		TableScanDesc scan;
 		Snapshot	snapshot;
 
 		/* Scan all tuples in this relation */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = heap_beginscan(testrel, snapshot, 0, NULL);
-		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+		scan = table_beginscan(testrel, snapshot, 0, NULL);
+		slot = table_slot_create(testrel, NULL);
+		while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 		{
 			int			i;
 
@@ -2795,7 +2802,7 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 				Datum		conResult;
 				Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
 
-				d = heap_getattr(tuple, attnum, tupdesc, &isNull);
+				d = slot_getattr(slot, attnum, &isNull);
 
 				econtext->domainValue_datum = d;
 				econtext->domainValue_isNull = isNull;
@@ -2825,7 +2832,8 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 
 			ResetExprContext(econtext);
 		}
-		heap_endscan(scan);
+		ExecDropSingleTupleTableSlot(slot);
+		table_endscan(scan);
 		UnregisterSnapshot(snapshot);
 
 		/* Hold relation lock till commit (XXX bad for concurrency) */
@@ -2991,7 +2999,7 @@ get_rels_with_domain(Oid domainOid, LOCKMODE lockmode)
 			rtc->rel = rel;
 			rtc->natts = 0;
 			rtc->atts = (int *) palloc(sizeof(int) * RelationGetNumberOfAttributes(rel));
-			result = lcons(rtc, result);
+			result = lappend(result, rtc);
 		}
 
 		/*

@@ -196,8 +196,8 @@ static ActiveSnapshotElt *OldestActiveSnapshot = NULL;
  * Currently registered Snapshots.  Ordered in a heap by xmin, so that we can
  * quickly find the one with lowest xmin, to advance our MyPgXact->xmin.
  */
-static int xmin_cmp(const pairingheap_node *a, const pairingheap_node *b,
-		 void *arg);
+static int	xmin_cmp(const pairingheap_node *a, const pairingheap_node *b,
+					 void *arg);
 
 static pairingheap RegisteredSnapshots = {&xmin_cmp, NULL, NULL};
 
@@ -957,6 +957,36 @@ xmin_cmp(const pairingheap_node *a, const pairingheap_node *b, void *arg)
 }
 
 /*
+ * Get current RecentGlobalXmin value, as a FullTransactionId.
+ */
+FullTransactionId
+GetFullRecentGlobalXmin(void)
+{
+	FullTransactionId nextxid_full;
+	uint32		nextxid_epoch;
+	TransactionId nextxid_xid;
+	uint32		epoch;
+
+	Assert(TransactionIdIsNormal(RecentGlobalXmin));
+
+	/*
+	 * Compute the epoch from the next XID's epoch. This relies on the fact
+	 * that RecentGlobalXmin must be within the 2 billion XID horizon from the
+	 * next XID.
+	 */
+	nextxid_full = ReadNextFullTransactionId();
+	nextxid_epoch = EpochFromFullTransactionId(nextxid_full);
+	nextxid_xid = XidFromFullTransactionId(nextxid_full);
+
+	if (RecentGlobalXmin > nextxid_xid)
+		epoch = nextxid_epoch - 1;
+	else
+		epoch = nextxid_epoch;
+
+	return FullTransactionIdFromEpochAndXid(epoch, RecentGlobalXmin);
+}
+
+/*
  * SnapshotResetXmin
  *
  * If there are no more snapshots, we can reset our PGXACT->xmin to InvalidXid.
@@ -1093,7 +1123,7 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 		 * prevent a warning below.
 		 *
 		 * As with the FirstXactSnapshot, we don't need to free resources of
-		 * the snapshot iself as it will go away with the memory context.
+		 * the snapshot itself as it will go away with the memory context.
 		 */
 		foreach(lc, exportedSnapshots)
 		{
@@ -1508,6 +1538,8 @@ ImportSnapshot(const char *idstr)
 	src_dbid = parseXidFromText("dbid:", &filebuf, path);
 	src_isolevel = parseIntFromText("iso:", &filebuf, path);
 	src_readonly = parseIntFromText("ro:", &filebuf, path);
+
+	snapshot.snapshot_type = SNAPSHOT_MVCC;
 
 	snapshot.xmin = parseXidFromText("xmin:", &filebuf, path);
 	snapshot.xmax = parseXidFromText("xmax:", &filebuf, path);

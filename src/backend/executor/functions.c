@@ -146,24 +146,24 @@ typedef struct SQLFunctionParseInfo
 /* non-export function prototypes */
 static Node *sql_fn_param_ref(ParseState *pstate, ParamRef *pref);
 static Node *sql_fn_post_column_ref(ParseState *pstate,
-					   ColumnRef *cref, Node *var);
+									ColumnRef *cref, Node *var);
 static Node *sql_fn_make_param(SQLFunctionParseInfoPtr pinfo,
-				  int paramno, int location);
+							   int paramno, int location);
 static Node *sql_fn_resolve_param_name(SQLFunctionParseInfoPtr pinfo,
-						  const char *paramname, int location);
+									   const char *paramname, int location);
 static List *init_execution_state(List *queryTree_list,
-					 SQLFunctionCachePtr fcache,
-					 bool lazyEvalOK);
+								  SQLFunctionCachePtr fcache,
+								  bool lazyEvalOK);
 static void init_sql_fcache(FmgrInfo *finfo, Oid collation, bool lazyEvalOK);
 static void postquel_start(execution_state *es, SQLFunctionCachePtr fcache);
 static bool postquel_getnext(execution_state *es, SQLFunctionCachePtr fcache);
 static void postquel_end(execution_state *es);
 static void postquel_sub_params(SQLFunctionCachePtr fcache,
-					FunctionCallInfo fcinfo);
+								FunctionCallInfo fcinfo);
 static Datum postquel_get_single_result(TupleTableSlot *slot,
-						   FunctionCallInfo fcinfo,
-						   SQLFunctionCachePtr fcache,
-						   MemoryContext resultcontext);
+										FunctionCallInfo fcinfo,
+										SQLFunctionCachePtr fcache,
+										MemoryContext resultcontext);
 static void sql_exec_error_callback(void *arg);
 static void ShutdownSQLFunction(Datum arg);
 static void sqlfunction_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
@@ -906,21 +906,10 @@ postquel_sub_params(SQLFunctionCachePtr fcache,
 	if (nargs > 0)
 	{
 		ParamListInfo paramLI;
-		int			i;
 
 		if (fcache->paramLI == NULL)
 		{
-			paramLI = (ParamListInfo)
-				palloc(offsetof(ParamListInfoData, params) +
-					   nargs * sizeof(ParamExternData));
-			/* we have static list of params, so no hooks needed */
-			paramLI->paramFetch = NULL;
-			paramLI->paramFetchArg = NULL;
-			paramLI->paramCompile = NULL;
-			paramLI->paramCompileArg = NULL;
-			paramLI->parserSetup = NULL;
-			paramLI->parserSetupArg = NULL;
-			paramLI->numParams = nargs;
+			paramLI = makeParamList(nargs);
 			fcache->paramLI = paramLI;
 		}
 		else
@@ -929,7 +918,7 @@ postquel_sub_params(SQLFunctionCachePtr fcache,
 			Assert(paramLI->numParams == nargs);
 		}
 
-		for (i = 0; i < nargs; i++)
+		for (int i = 0; i < nargs; i++)
 		{
 			ParamExternData *prm = &paramLI->params[i];
 
@@ -1192,7 +1181,7 @@ fmgr_sql(PG_FUNCTION_ARGS)
 		es = es->next;
 		while (!es)
 		{
-			eslc = lnext(eslc);
+			eslc = lnext(eslist, eslc);
 			if (!eslc)
 				break;			/* end of function */
 
@@ -1773,7 +1762,7 @@ check_sql_fn_retval(Oid func_id, Oid rettype, List *queryTreeList,
 				if (junkFilter)
 				{
 					TupleTableSlot *slot =
-						MakeSingleTupleTableSlot(NULL, &TTSOpsMinimalTuple);
+					MakeSingleTupleTableSlot(NULL, &TTSOpsMinimalTuple);
 
 					*junkFilter = ExecInitJunkFilter(tlist, slot);
 				}
@@ -1940,7 +1929,7 @@ check_sql_fn_retval(Oid func_id, Oid rettype, List *queryTreeList,
 		if (junkFilter)
 		{
 			TupleTableSlot *slot =
-				MakeSingleTupleTableSlot(NULL, &TTSOpsMinimalTuple);
+			MakeSingleTupleTableSlot(NULL, &TTSOpsMinimalTuple);
 
 			*junkFilter = ExecInitJunkFilterConversion(tlist,
 													   CreateTupleDescCopy(tupdesc),

@@ -99,9 +99,11 @@ typedef struct
 #define DEPFLAG_NORMAL		0x0002	/* reached via normal dependency */
 #define DEPFLAG_AUTO		0x0004	/* reached via auto dependency */
 #define DEPFLAG_INTERNAL	0x0008	/* reached via internal dependency */
-#define DEPFLAG_EXTENSION	0x0010	/* reached via extension dependency */
-#define DEPFLAG_REVERSE		0x0020	/* reverse internal/extension link */
-#define DEPFLAG_SUBOBJECT	0x0040	/* subobject of another deletable object */
+#define DEPFLAG_PARTITION	0x0010	/* reached via partition dependency */
+#define DEPFLAG_EXTENSION	0x0020	/* reached via extension dependency */
+#define DEPFLAG_REVERSE		0x0040	/* reverse internal/extension link */
+#define DEPFLAG_IS_PART		0x0080	/* has a partition dependency */
+#define DEPFLAG_SUBOBJECT	0x0100	/* subobject of another deletable object */
 
 
 /* expansible list of ObjectAddresses */
@@ -184,36 +186,36 @@ static const Oid object_classes[] = {
 
 
 static void findDependentObjects(const ObjectAddress *object,
-					 int objflags,
-					 int flags,
-					 ObjectAddressStack *stack,
-					 ObjectAddresses *targetObjects,
-					 const ObjectAddresses *pendingObjects,
-					 Relation *depRel);
+								 int objflags,
+								 int flags,
+								 ObjectAddressStack *stack,
+								 ObjectAddresses *targetObjects,
+								 const ObjectAddresses *pendingObjects,
+								 Relation *depRel);
 static void reportDependentObjects(const ObjectAddresses *targetObjects,
-					   DropBehavior behavior,
-					   int flags,
-					   const ObjectAddress *origObject);
+								   DropBehavior behavior,
+								   int flags,
+								   const ObjectAddress *origObject);
 static void deleteOneObject(const ObjectAddress *object,
-				Relation *depRel, int32 flags);
+							Relation *depRel, int32 flags);
 static void doDeletion(const ObjectAddress *object, int flags);
 static void AcquireDeletionLock(const ObjectAddress *object, int flags);
 static void ReleaseDeletionLock(const ObjectAddress *object);
 static bool find_expr_references_walker(Node *node,
-							find_expr_references_context *context);
+										find_expr_references_context *context);
 static void eliminate_duplicate_dependencies(ObjectAddresses *addrs);
 static int	object_address_comparator(const void *a, const void *b);
 static void add_object_address(ObjectClass oclass, Oid objectId, int32 subId,
-				   ObjectAddresses *addrs);
-static void add_exact_object_address_extra(const ObjectAddress *object,
-							   const ObjectAddressExtra *extra,
 							   ObjectAddresses *addrs);
+static void add_exact_object_address_extra(const ObjectAddress *object,
+										   const ObjectAddressExtra *extra,
+										   ObjectAddresses *addrs);
 static bool object_address_present_add_flags(const ObjectAddress *object,
-								 int flags,
-								 ObjectAddresses *addrs);
+											 int flags,
+											 ObjectAddresses *addrs);
 static bool stack_address_present_add_flags(const ObjectAddress *object,
-								int flags,
-								ObjectAddressStack *stack);
+											int flags,
+											ObjectAddressStack *stack);
 static void DeleteInitPrivs(const ObjectAddress *object);
 
 
@@ -304,6 +306,10 @@ deleteObjectsInList(ObjectAddresses *targetObjects, Relation *depRel,
  * PERFORM_DELETION_SKIP_EXTENSIONS: do not delete extensions, even when
  * deleting objects that are part of an extension.  This should generally
  * be used only when dropping temporary objects.
+ *
+ * PERFORM_DELETION_CONCURRENT_LOCK: perform the drop normally but with a lock
+ * as if it were concurrent.  This is used by REINDEX CONCURRENTLY.
+ *
  */
 void
 performDeletion(const ObjectAddress *object,
@@ -478,6 +484,8 @@ findDependentObjects(const ObjectAddress *object,
 	SysScanDesc scan;
 	HeapTuple	tup;
 	ObjectAddress otherObject;
+	ObjectAddress owningObject;
+	ObjectAddress partitionObject;
 	ObjectAddressAndFlags *dependentObjects;
 	int			numDependentObjects;
 	int			maxDependentObjects;
@@ -535,6 +543,7 @@ findDependentObjects(const ObjectAddress *object,
 				ObjectIdGetDatum(object->objectId));
 	if (object->objectSubId != 0)
 	{
+		/* Consider only dependencies of this sub-object */
 		ScanKeyInit(&key[2],
 					Anum_pg_depend_objsubid,
 					BTEqualStrategyNumber, F_INT4EQ,
@@ -542,10 +551,17 @@ findDependentObjects(const ObjectAddress *object,
 		nkeys = 3;
 	}
 	else
+	{
+		/* Consider dependencies of this object and any sub-objects it has */
 		nkeys = 2;
+	}
 
 	scan = systable_beginscan(*depRel, DependDependerIndexId, true,
 							  NULL, nkeys, key);
+
+	/* initialize variables that loop may fill */
+	memset(&owningObject, 0, sizeof(owningObject));
+	memset(&partitionObject, 0, sizeof(partitionObject));
 
 	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
@@ -554,6 +570,18 @@ findDependentObjects(const ObjectAddress *object,
 		otherObject.classId = foundDep->refclassid;
 		otherObject.objectId = foundDep->refobjid;
 		otherObject.objectSubId = foundDep->refobjsubid;
+
+		/*
+		 * When scanning dependencies of a whole object, we may find rows
+		 * linking sub-objects of the object to the object itself.  (Normally,
+		 * such a dependency is implicit, but we must make explicit ones in
+		 * some cases involving partitioning.)  We must ignore such rows to
+		 * avoid infinite recursion.
+		 */
+		if (otherObject.classId == object->classId &&
+			otherObject.objectId == object->objectId &&
+			object->objectSubId == 0)
+			continue;
 
 		switch (foundDep->deptype)
 		{
@@ -591,24 +619,26 @@ findDependentObjects(const ObjectAddress *object,
 				/* FALL THRU */
 
 			case DEPENDENCY_INTERNAL:
-			case DEPENDENCY_INTERNAL_AUTO:
 
 				/*
 				 * This object is part of the internal implementation of
 				 * another object, or is part of the extension that is the
 				 * other object.  We have three cases:
 				 *
-				 * 1. At the outermost recursion level, disallow the DROP. (We
-				 * just ereport here, rather than proceeding, since no other
-				 * dependencies are likely to be interesting.)	However, if
-				 * the owning object is listed in pendingObjects, just release
-				 * the caller's lock and return; we'll eventually complete the
-				 * DROP when we reach that entry in the pending list.
+				 * 1. At the outermost recursion level, we must disallow the
+				 * DROP.  However, if the owning object is listed in
+				 * pendingObjects, just release the caller's lock and return;
+				 * we'll eventually complete the DROP when we reach that entry
+				 * in the pending list.
+				 *
+				 * Note: the above statement is true only if this pg_depend
+				 * entry still exists by then; in principle, therefore, we
+				 * could miss deleting an item the user told us to delete.
+				 * However, no inconsistency can result: since we're at outer
+				 * level, there is no object depending on this one.
 				 */
 				if (stack == NULL)
 				{
-					char	   *otherObjDesc;
-
 					if (pendingObjects &&
 						object_address_present(&otherObject, pendingObjects))
 					{
@@ -617,14 +647,21 @@ findDependentObjects(const ObjectAddress *object,
 						ReleaseDeletionLock(object);
 						return;
 					}
-					otherObjDesc = getObjectDescription(&otherObject);
-					ereport(ERROR,
-							(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
-							 errmsg("cannot drop %s because %s requires it",
-									getObjectDescription(object),
-									otherObjDesc),
-							 errhint("You can drop %s instead.",
-									 otherObjDesc)));
+
+					/*
+					 * We postpone actually issuing the error message until
+					 * after this loop, so that we can make the behavior
+					 * independent of the ordering of pg_depend entries, at
+					 * least if there's not more than one INTERNAL and one
+					 * EXTENSION dependency.  (If there's more, we'll complain
+					 * about a random one of them.)  Prefer to complain about
+					 * EXTENSION, since that's generally a more important
+					 * dependency.
+					 */
+					if (!OidIsValid(owningObject.classId) ||
+						foundDep->deptype == DEPENDENCY_EXTENSION)
+						owningObject = otherObject;
+					break;
 				}
 
 				/*
@@ -643,14 +680,6 @@ findDependentObjects(const ObjectAddress *object,
 				 * transform this deletion request into a delete of this
 				 * owning object.
 				 *
-				 * For INTERNAL_AUTO dependencies, we don't enforce this; in
-				 * other words, we don't follow the links back to the owning
-				 * object.
-				 */
-				if (foundDep->deptype == DEPENDENCY_INTERNAL_AUTO)
-					break;
-
-				/*
 				 * First, release caller's lock on this object and get
 				 * deletion lock on the owning object.  (We must release
 				 * caller's lock to avoid deadlock against a concurrent
@@ -673,6 +702,13 @@ findDependentObjects(const ObjectAddress *object,
 				}
 
 				/*
+				 * One way or the other, we're done with the scan; might as
+				 * well close it down before recursing, to reduce peak
+				 * resource consumption.
+				 */
+				systable_endscan(scan);
+
+				/*
 				 * Okay, recurse to the owning object instead of proceeding.
 				 *
 				 * We do not need to stack the current object; we want the
@@ -690,9 +726,65 @@ findDependentObjects(const ObjectAddress *object,
 									 targetObjects,
 									 pendingObjects,
 									 depRel);
+
+				/*
+				 * The current target object should have been added to
+				 * targetObjects while processing the owning object; but it
+				 * probably got only the flag bits associated with the
+				 * dependency we're looking at.  We need to add the objflags
+				 * that were passed to this recursion level, too, else we may
+				 * get a bogus failure in reportDependentObjects (if, for
+				 * example, we were called due to a partition dependency).
+				 *
+				 * If somehow the current object didn't get scheduled for
+				 * deletion, bleat.  (That would imply that somebody deleted
+				 * this dependency record before the recursion got to it.)
+				 * Another idea would be to reacquire lock on the current
+				 * object and resume trying to delete it, but it seems not
+				 * worth dealing with the race conditions inherent in that.
+				 */
+				if (!object_address_present_add_flags(object, objflags,
+													  targetObjects))
+					elog(ERROR, "deletion of owning object %s failed to delete %s",
+						 getObjectDescription(&otherObject),
+						 getObjectDescription(object));
+
 				/* And we're done here. */
-				systable_endscan(scan);
 				return;
+
+			case DEPENDENCY_PARTITION_PRI:
+
+				/*
+				 * Remember that this object has a partition-type dependency.
+				 * After the dependency scan, we'll complain if we didn't find
+				 * a reason to delete one of its partition dependencies.
+				 */
+				objflags |= DEPFLAG_IS_PART;
+
+				/*
+				 * Also remember the primary partition owner, for error
+				 * messages.  If there are multiple primary owners (which
+				 * there should not be), we'll report a random one of them.
+				 */
+				partitionObject = otherObject;
+				break;
+
+			case DEPENDENCY_PARTITION_SEC:
+
+				/*
+				 * Only use secondary partition owners in error messages if we
+				 * find no primary owner (which probably shouldn't happen).
+				 */
+				if (!(objflags & DEPFLAG_IS_PART))
+					partitionObject = otherObject;
+
+				/*
+				 * Remember that this object has a partition-type dependency.
+				 * After the dependency scan, we'll complain if we didn't find
+				 * a reason to delete one of its partition dependencies.
+				 */
+				objflags |= DEPFLAG_IS_PART;
+				break;
 
 			case DEPENDENCY_PIN:
 
@@ -711,6 +803,28 @@ findDependentObjects(const ObjectAddress *object,
 	}
 
 	systable_endscan(scan);
+
+	/*
+	 * If we found an INTERNAL or EXTENSION dependency when we're at outer
+	 * level, complain about it now.  If we also found a PARTITION dependency,
+	 * we prefer to report the PARTITION dependency.  This is arbitrary but
+	 * seems to be more useful in practice.
+	 */
+	if (OidIsValid(owningObject.classId))
+	{
+		char	   *otherObjDesc;
+
+		if (OidIsValid(partitionObject.classId))
+			otherObjDesc = getObjectDescription(&partitionObject);
+		else
+			otherObjDesc = getObjectDescription(&owningObject);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
+				 errmsg("cannot drop %s because %s requires it",
+						getObjectDescription(object), otherObjDesc),
+				 errhint("You can drop %s instead.", otherObjDesc)));
+	}
 
 	/*
 	 * Next, identify all objects that directly depend on the current object.
@@ -757,6 +871,16 @@ findDependentObjects(const ObjectAddress *object,
 		otherObject.objectSubId = foundDep->objsubid;
 
 		/*
+		 * If what we found is a sub-object of the current object, just ignore
+		 * it.  (Normally, such a dependency is implicit, but we must make
+		 * explicit ones in some cases involving partitioning.)
+		 */
+		if (otherObject.classId == object->classId &&
+			otherObject.objectId == object->objectId &&
+			object->objectSubId == 0)
+			continue;
+
+		/*
 		 * Must lock the dependent object before recursing to it.
 		 */
 		AcquireDeletionLock(&otherObject, 0);
@@ -789,9 +913,12 @@ findDependentObjects(const ObjectAddress *object,
 			case DEPENDENCY_AUTO_EXTENSION:
 				subflags = DEPFLAG_AUTO;
 				break;
-			case DEPENDENCY_INTERNAL_AUTO:
 			case DEPENDENCY_INTERNAL:
 				subflags = DEPFLAG_INTERNAL;
+				break;
+			case DEPENDENCY_PARTITION_PRI:
+			case DEPENDENCY_PARTITION_SEC:
+				subflags = DEPFLAG_PARTITION;
 				break;
 			case DEPENDENCY_EXTENSION:
 				subflags = DEPFLAG_EXTENSION;
@@ -868,10 +995,15 @@ findDependentObjects(const ObjectAddress *object,
 	/*
 	 * Finally, we can add the target object to targetObjects.  Be careful to
 	 * include any flags that were passed back down to us from inner recursion
-	 * levels.
+	 * levels.  Record the "dependee" as being either the most important
+	 * partition owner if there is one, else the object we recursed from, if
+	 * any.  (The logic in reportDependentObjects() is such that it can only
+	 * need one of those objects.)
 	 */
 	extra.flags = mystack.flags;
-	if (stack)
+	if (extra.flags & DEPFLAG_IS_PART)
+		extra.dependee = partitionObject;
+	else if (stack)
 		extra.dependee = *stack->object;
 	else
 		memset(&extra.dependee, 0, sizeof(extra.dependee));
@@ -906,8 +1038,37 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 	int			i;
 
 	/*
+	 * If we need to delete any partition-dependent objects, make sure that
+	 * we're deleting at least one of their partition dependencies, too. That
+	 * can be detected by checking that we reached them by a PARTITION
+	 * dependency at some point.
+	 *
+	 * We just report the first such object, as in most cases the only way to
+	 * trigger this complaint is to explicitly try to delete one partition of
+	 * a partitioned object.
+	 */
+	for (i = 0; i < targetObjects->numrefs; i++)
+	{
+		const ObjectAddressExtra *extra = &targetObjects->extras[i];
+
+		if ((extra->flags & DEPFLAG_IS_PART) &&
+			!(extra->flags & DEPFLAG_PARTITION))
+		{
+			const ObjectAddress *object = &targetObjects->refs[i];
+			char	   *otherObjDesc = getObjectDescription(&extra->dependee);
+
+			ereport(ERROR,
+					(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
+					 errmsg("cannot drop %s because %s requires it",
+							getObjectDescription(object), otherObjDesc),
+					 errhint("You can drop %s instead.", otherObjDesc)));
+		}
+	}
+
+	/*
 	 * If no error is to be thrown, and the msglevel is too low to be shown to
-	 * either client or server log, there's no need to do any of the work.
+	 * either client or server log, there's no need to do any of the rest of
+	 * the work.
 	 *
 	 * Note: this code doesn't know all there is to be known about elog
 	 * levels, but it works for NOTICE and DEBUG2, which are the only values
@@ -951,11 +1112,12 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 
 		/*
 		 * If, at any stage of the recursive search, we reached the object via
-		 * an AUTO, INTERNAL, or EXTENSION dependency, then it's okay to
-		 * delete it even in RESTRICT mode.
+		 * an AUTO, INTERNAL, PARTITION, or EXTENSION dependency, then it's
+		 * okay to delete it even in RESTRICT mode.
 		 */
 		if (extra->flags & (DEPFLAG_AUTO |
 							DEPFLAG_INTERNAL |
+							DEPFLAG_PARTITION |
 							DEPFLAG_EXTENSION))
 		{
 			/*
@@ -1184,9 +1346,10 @@ doDeletion(const ObjectAddress *object, int flags)
 					relKind == RELKIND_PARTITIONED_INDEX)
 				{
 					bool		concurrent = ((flags & PERFORM_DELETION_CONCURRENTLY) != 0);
+					bool		concurrent_lock_mode = ((flags & PERFORM_DELETION_CONCURRENT_LOCK) != 0);
 
 					Assert(object->objectSubId == 0);
-					index_drop(object->objectId, concurrent);
+					index_drop(object->objectId, concurrent, concurrent_lock_mode);
 				}
 				else
 				{
@@ -1451,8 +1614,10 @@ recordDependencyOnExpr(const ObjectAddress *depender,
  * As above, but only one relation is expected to be referenced (with
  * varno = 1 and varlevelsup = 0).  Pass the relation OID instead of a
  * range table.  An additional frammish is that dependencies on that
- * relation (or its component columns) will be marked with 'self_behavior',
- * whereas 'behavior' is used for everything else.
+ * relation's component columns will be marked with 'self_behavior',
+ * whereas 'behavior' is used for everything else; also, if 'reverse_self'
+ * is true, those dependencies are reversed so that the columns are made
+ * to depend on the table not vice versa.
  *
  * NOTE: the caller should ensure that a whole-table dependency on the
  * specified relation is created separately, if one is needed.  In particular,
@@ -1465,7 +1630,7 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 								Node *expr, Oid relId,
 								DependencyType behavior,
 								DependencyType self_behavior,
-								bool ignore_self)
+								bool reverse_self)
 {
 	find_expr_references_context context;
 	RangeTblEntry rte;
@@ -1489,7 +1654,8 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 	eliminate_duplicate_dependencies(context.addrs);
 
 	/* Separate self-dependencies if necessary */
-	if (behavior != self_behavior && context.addrs->numrefs > 0)
+	if ((behavior != self_behavior || reverse_self) &&
+		context.addrs->numrefs > 0)
 	{
 		ObjectAddresses *self_addrs;
 		ObjectAddress *outobj;
@@ -1520,11 +1686,23 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 		}
 		context.addrs->numrefs = outrefs;
 
-		/* Record the self-dependencies */
-		if (!ignore_self)
+		/* Record the self-dependencies with the appropriate direction */
+		if (!reverse_self)
 			recordMultipleDependencies(depender,
 									   self_addrs->refs, self_addrs->numrefs,
 									   self_behavior);
+		else
+		{
+			/* Can't use recordMultipleDependencies, so do it the hard way */
+			int			selfref;
+
+			for (selfref = 0; selfref < self_addrs->numrefs; selfref++)
+			{
+				ObjectAddress *thisobj = self_addrs->refs + selfref;
+
+				recordDependencyOn(thisobj, depender, self_behavior);
+			}
+		}
 
 		free_object_addresses(self_addrs);
 	}
@@ -2476,6 +2654,23 @@ record_object_address_dependencies(const ObjectAddress *depender,
 	recordMultipleDependencies(depender,
 							   referenced->refs, referenced->numrefs,
 							   behavior);
+}
+
+/*
+ * Sort the items in an ObjectAddresses array.
+ *
+ * The major sort key is OID-descending, so that newer objects will be listed
+ * first in most cases.  This is primarily useful for ensuring stable outputs
+ * from regression tests; it's not recommended if the order of the objects is
+ * determined by user input, such as the order of targets in a DROP command.
+ */
+void
+sort_object_addresses(ObjectAddresses *addrs)
+{
+	if (addrs->numrefs > 1)
+		qsort((void *) addrs->refs, addrs->numrefs,
+			  sizeof(ObjectAddress),
+			  object_address_comparator);
 }
 
 /*

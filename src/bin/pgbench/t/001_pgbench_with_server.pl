@@ -10,12 +10,19 @@ my $node = get_new_node('main');
 $node->init;
 $node->start;
 
-# invoke pgbench
+# invoke pgbench, with parameters:
+#   $opts: options as a string to be split on spaces
+#   $stat: expected exit status
+#   $out: reference to a regexp list that must match stdout
+#   $err: reference to a regexp list that must match stderr
+#   $name: name of test for error messages
+#   $files: reference to filename/contents dictionary
+#   @args: further raw options or arguments
 sub pgbench
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 
-	my ($opts, $stat, $out, $err, $name, $files) = @_;
+	my ($opts, $stat, $out, $err, $name, $files, @args) = @_;
 	my @cmd = ('pgbench', split /\s+/, $opts);
 	my @filenames = ();
 	if (defined $files)
@@ -40,6 +47,9 @@ sub pgbench
 			append_to_file($filename, $$files{$fn});
 		}
 	}
+
+	push @cmd, @args;
+
 	$node->command_checks_all(\@cmd, $stat, $out, $err, $name);
 
 	# cleanup?
@@ -48,26 +58,19 @@ sub pgbench
 	return;
 }
 
-# Test concurrent insertion into table with serial column.  This
-# indirectly exercises LWLock and spinlock concurrency.  This test
-# makes a 5-MiB table.
-
-$node->safe_psql('postgres',
-				 'CREATE UNLOGGED TABLE insert_tbl (id serial primary key); ');
-
+# Test concurrent OID generation via pg_enum_oid_index.  This indirectly
+# exercises LWLock and spinlock concurrency.
+my $labels = join ',', map { "'l$_'" } 1 .. 1000;
 pgbench(
 	'--no-vacuum --client=5 --protocol=prepared --transactions=25',
 	0,
 	[qr{processed: 125/125}],
 	[qr{^$}],
-	'concurrent insert workload',
+	'concurrent OID generation',
 	{
 		'001_pgbench_concurrent_insert' =>
-		  'INSERT INTO insert_tbl SELECT FROM generate_series(1,1000);'
+		  "CREATE TYPE pg_temp.e AS ENUM ($labels); DROP TYPE pg_temp.e;"
 	});
-
-# cleanup
-$node->safe_psql('postgres', 'DROP TABLE insert_tbl;');
 
 # Trigger various connection errors
 pgbench(
@@ -91,7 +94,7 @@ pgbench(
 	[qr{^$}],
 	[
 		qr{creating tables},       qr{vacuuming},
-		qr{creating primary keys}, qr{done\.}
+		qr{creating primary keys}, qr{done in \d+\.\d\d s }
 	],
 	'pgbench scale 1 initialization',);
 
@@ -106,7 +109,8 @@ pgbench(
 		qr{vacuuming},
 		qr{creating primary keys},
 		qr{creating foreign keys},
-		qr{done\.}
+		qr{(?!vacuuming)}, # no vacuum
+		qr{done in \d+\.\d\d s }
 	],
 	'pgbench scale 1 initialization');
 
@@ -121,7 +125,8 @@ pgbench(
 		qr{creating primary keys},
 		qr{.* of .* tuples \(.*\) done},
 		qr{creating foreign keys},
-		qr{done\.}
+		qr{(?!vacuuming)}, # no vacuum
+		qr{done in \d+\.\d\d s }
 	],
 	'pgbench --init-steps');
 
@@ -276,7 +281,7 @@ pgbench(
 		qr{command=15.: double 15\b},
 		qr{command=16.: double 16\b},
 		qr{command=17.: double 17\b},
-		qr{command=20.: int 1\b},      # zipfian random
+		qr{command=20.: int 1\b},    # zipfian random
 		qr{command=21.: double -27\b},
 		qr{command=22.: double 1024\b},
 		qr{command=23.: double 1\b},
@@ -316,9 +321,9 @@ pgbench(
 		qr{command=86.: int 86\b},
 		qr{command=93.: int 93\b},
 		qr{command=95.: int 0\b},
-		qr{command=96.: int 1\b},       # :scale
-		qr{command=97.: int 0\b},       # :client_id
-		qr{command=98.: int 5432\b},    # :random_seed
+		qr{command=96.: int 1\b},                       # :scale
+		qr{command=97.: int 0\b},                       # :client_id
+		qr{command=98.: int 5432\b},                    # :random_seed
 		qr{command=99.: int -9223372036854775808\b},    # min int
 		qr{command=100.: int 9223372036854775807\b},    # max int
 	],
@@ -507,7 +512,7 @@ pgbench(
 		qr{processed: 1/1},
 		qr{shell-echo-output}
 	],
-	[qr{command=8.: int 2\b}],
+	[qr{command=8.: int 1\b}],
 	'pgbench backslash commands',
 	{
 		'001_pgbench_backslash_commands' => q{-- run set
@@ -519,31 +524,30 @@ pgbench(
 \sleep 0 s
 \sleep :zero
 -- setshell and continuation
-\setshell two\
-  expr \
-    1 + :one
-\set n debug(:two)
+\setshell another_one\
+  echo \
+    :one
+\set n debug(:another_one)
 -- shell
 \shell echo shell-echo-output
 }
 	});
 
-# working \gset and \cset
+# working \gset
 pgbench(
 	'-t 1', 0,
-	[ qr{type: .*/001_pgbench_gset_and_cset}, qr{processed: 1/1} ],
-	[   qr{command=3.: int 0\b},
+	[ qr{type: .*/001_pgbench_gset}, qr{processed: 1/1} ],
+	[
+		qr{command=3.: int 0\b},
 		qr{command=5.: int 1\b},
 		qr{command=6.: int 2\b},
 		qr{command=8.: int 3\b},
-		qr{command=9.: int 4\b},
-		qr{command=10.: int 5\b},
-		qr{command=12.: int 6\b},
-		qr{command=13.: int 7\b},
-		qr{command=14.: int 8\b},
-		qr{command=16.: int 9\b} ],
-	'pgbench gset and cset commands',
-	{   '001_pgbench_gset_and_cset' => q{-- test gset and cset
+		qr{command=10.: int 4\b},
+		qr{command=12.: int 5\b}
+	],
+	'pgbench gset command',
+	{
+		'001_pgbench_gset' => q{-- test gset
 -- no columns
 SELECT \gset
 -- one value
@@ -553,22 +557,17 @@ SELECT 0 AS i0 \gset
 SELECT 1 AS i1, 2 AS i2 \gset
 \set i debug(:i1)
 \set i debug(:i2)
--- cset & gset to follow
-SELECT :i2 + 1 AS i3, :i2 * :i2 AS i4 \cset
-  SELECT 5 AS i5 \gset
-\set i debug(:i3)
-\set i debug(:i4)
-\set i debug(:i5)
 -- with prefix
-SELECT 6 AS i6, 7 AS i7 \cset x_
-  SELECT 8 AS i8 \gset y_
-\set i debug(:x_i6)
-\set i debug(:x_i7)
-\set i debug(:y_i8)
+SELECT 3 AS i3 \gset x_
+\set i debug(:x_i3)
 -- overwrite existing variable
-SELECT 0 AS i9, 9 AS i9 \gset
-\set i debug(:i9)
-} });
+SELECT 0 AS i4, 4 AS i4 \gset
+\set i debug(:i4)
+-- work on the last SQL command under \;
+\; \; SELECT 0 AS i5 \; SELECT 5 AS i5 \; \; \gset
+\set i debug(:i5)
+}
+	});
 
 # trigger many expression errors
 my @errors = (
@@ -587,11 +586,11 @@ my @errors = (
 }
 	],
 	[
-		'sql too many args', 1, [qr{statement has too many arguments.*\b9\b}],
-		q{-- MAX_ARGS=10 for prepared
+		'sql too many args', 1,
+		[qr{statement has too many arguments.*\b255\b}],
+		q{-- MAX_ARGS=256 for prepared
 \set i 0
-SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
-}
+SELECT LEAST(} . join(', ', (':i') x 256) . q{)}
 	],
 
 	# SHELL
@@ -609,25 +608,8 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 	[ 'shell missing command', 1, [qr{missing command }], q{\shell} ],
 	[
 		'shell too many args', 1, [qr{too many arguments in command "shell"}],
-		q{-- 257 arguments to \shell
-\shell echo \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F \
- 0 1 2 3 4 5 6 7 8 9 A B C D E F
-}
+		q{-- 256 arguments to \shell
+\shell echo } . join(' ', ('arg') x 255)
 	],
 
 	# SET
@@ -643,11 +625,9 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 		'set invalid variable name', 2,
 		[qr{invalid variable name}], q{\set . 1}
 	],
+	[ 'set division by zero', 2, [qr{division by zero}], q{\set i 1/0} ],
 	[
-		'set division by zero', 2,
-		[qr{division by zero}], q{\set i 1/0}
-	],
-	[   'set undefined variable',
+		'set undefined variable',
 		2,
 		[qr{undefined variable "nosuchvariable"}],
 		q{\set i :nosuchvariable}
@@ -664,10 +644,8 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 		[qr{empty range given to random}], q{\set i random(5,3)}
 	],
 	[
-		'set random range too large',
-		2,
-		[qr{random range is too large}],
-		q{\set i random(:minint, :maxint)}
+		'set random range too large',    2,
+		[qr{random range is too large}], q{\set i random(:minint, :maxint)}
 	],
 	[
 		'set gaussian param too small',
@@ -684,13 +662,13 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 	[
 		'set zipfian param to 1',
 		2,
-		[qr{zipfian parameter must be in range \(0, 1\) U \(1, \d+\]}],
+		[qr{zipfian parameter must be in range \[1\.001, 1000\]}],
 		q{\set i random_zipfian(0, 10, 1)}
 	],
 	[
 		'set zipfian param too large',
 		2,
-		[qr{zipfian parameter must be in range \(0, 1\) U \(1, \d+\]}],
+		[qr{zipfian parameter must be in range \[1\.001, 1000\]}],
 		q{\set i random_zipfian(0, 10, 1000000)}
 	],
 	[
@@ -731,16 +709,26 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 	],
 
 	# SET: ARITHMETIC OVERFLOW DETECTION
-	[ 'set double to int overflow',                   2,
-		[ qr{double to int overflow for 100} ], q{\set i int(1E32)} ],
-	[ 'set bigint add overflow', 2,
-		[ qr{int add out} ], q{\set i (1<<62) + (1<<62)} ],
-	[ 'set bigint sub overflow', 2,
-		[ qr{int sub out} ], q{\set i 0 - (1<<62) - (1<<62) - (1<<62)} ],
-	[ 'set bigint mul overflow', 2,
-		[ qr{int mul out} ], q{\set i 2 * (1<<62)} ],
-	[ 'set bigint div out of range', 2,
-		[ qr{bigint div out of range} ], q{\set i :minint / -1} ],
+	[
+		'set double to int overflow',         2,
+		[qr{double to int overflow for 100}], q{\set i int(1E32)}
+	],
+	[
+		'set bigint add overflow', 2,
+		[qr{int add out}],         q{\set i (1<<62) + (1<<62)}
+	],
+	[
+		'set bigint sub overflow',
+		2, [qr{int sub out}], q{\set i 0 - (1<<62) - (1<<62) - (1<<62)}
+	],
+	[
+		'set bigint mul overflow', 2,
+		[qr{int mul out}], q{\set i 2 * (1<<62)}
+	],
+	[
+		'set bigint div out of range', 2,
+		[qr{bigint div out of range}], q{\set i :minint / -1}
+	],
 
 	# SETSHELL
 	[
@@ -777,34 +765,47 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 		[qr{invalid command .* "nosuchcommand"}], q{\nosuchcommand}
 	],
 	[ 'misc empty script', 1, [qr{empty command list for script}], q{} ],
-	[   'bad boolean',                     2,
-		[qr{malformed variable.*trueXXX}], q{\set b :badtrue or true} ],
+	[
+		'bad boolean',                     2,
+		[qr{malformed variable.*trueXXX}], q{\set b :badtrue or true}
+	],
 
-	# GSET & CSET
-	[   'gset no row',                    2,
-		[qr{expected one row, got 0\b}], q{SELECT WHERE FALSE \gset} ],
-	[   'cset no row',                    2,
-		[qr{expected one row, got 0\b}], q{SELECT WHERE FALSE \cset
-SELECT 1 AS i\gset}, 1 ],
-	[ 'gset alone', 1, [qr{gset/cset cannot start a script}], q{\gset} ],
-	[   'gset no SQL',                        1,
-		[qr{gset/cset must follow a SQL command}], q{\set i +1
-\gset} ],
-	[   'gset too many arguments',                   1,
-		[qr{too many arguments}], q{SELECT 1 \gset a b} ],
-	[   'gset after gset',                        1,
-	    [qr{gset/cset cannot follow one another}], q{SELECT 1 AS i \gset
-\gset} ],
-	[   'gset non SELECT', 2,
+	# GSET
+	[
+		'gset no row',                   2,
+		[qr{expected one row, got 0\b}], q{SELECT WHERE FALSE \gset}
+	],
+	[ 'gset alone', 1, [qr{gset must follow a SQL command}], q{\gset} ],
+	[
+		'gset no SQL',                        1,
+		[qr{gset must follow a SQL command}], q{\set i +1
+\gset}
+	],
+	[
+		'gset too many arguments', 1,
+		[qr{too many arguments}],  q{SELECT 1 \gset a b}
+	],
+	[
+		'gset after gset',                    1,
+		[qr{gset must follow a SQL command}], q{SELECT 1 AS i \gset
+\gset}
+	],
+	[
+		'gset non SELECT',
+		2,
 		[qr{expected one row, got 0}],
-		q{DROP TABLE IF EXISTS no_such_table \gset} ],
-	[   'gset bad default name', 2,
-		[qr{error storing into variable \?column\?}],
-		q{SELECT 1 \gset} ],
-	[   'gset bad name', 2,
+		q{DROP TABLE IF EXISTS no_such_table \gset}
+	],
+	[
+		'gset bad default name',                      2,
+		[qr{error storing into variable \?column\?}], q{SELECT 1 \gset}
+	],
+	[
+		'gset bad name',
+		2,
 		[qr{error storing into variable bad name!}],
-		q{SELECT 1 AS "bad name!" \gset} ],
-	);
+		q{SELECT 1 AS "bad name!" \gset}
+	],);
 
 for my $e (@errors)
 {
@@ -813,42 +814,15 @@ for my $e (@errors)
 	my $n = '001_pgbench_error_' . $name;
 	$n =~ s/ /_/g;
 	pgbench(
-		'-n -t 1 -Dfoo=bla -Dnull=null -Dtrue=true -Done=1 -Dzero=0.0 -Dbadtrue=trueXXX' .
-		' -Dmaxint=9223372036854775807 -Dminint=-9223372036854775808' .
-			($no_prepare ? '' : ' -M prepared'),
+		'-n -t 1 -Dfoo=bla -Dnull=null -Dtrue=true -Done=1 -Dzero=0.0 -Dbadtrue=trueXXX'
+		  . ' -Dmaxint=9223372036854775807 -Dminint=-9223372036854775808'
+		  . ($no_prepare ? '' : ' -M prepared'),
 		$status,
 		[ $status == 1 ? qr{^$} : qr{processed: 0/1} ],
 		$re,
 		'pgbench script error: ' . $name,
 		{ $n => $script });
 }
-
-# zipfian cache array overflow
-pgbench(
-	'-t 1', 0,
-	[ qr{processed: 1/1}, qr{zipfian cache array overflowed 1 time\(s\)} ],
-	[qr{^}],
-	'pgbench zipfian array overflow on random_zipfian',
-	{
-		'001_pgbench_random_zipfian' => q{
-\set i random_zipfian(1, 100, 0.5)
-\set i random_zipfian(2, 100, 0.5)
-\set i random_zipfian(3, 100, 0.5)
-\set i random_zipfian(4, 100, 0.5)
-\set i random_zipfian(5, 100, 0.5)
-\set i random_zipfian(6, 100, 0.5)
-\set i random_zipfian(7, 100, 0.5)
-\set i random_zipfian(8, 100, 0.5)
-\set i random_zipfian(9, 100, 0.5)
-\set i random_zipfian(10, 100, 0.5)
-\set i random_zipfian(11, 100, 0.5)
-\set i random_zipfian(12, 100, 0.5)
-\set i random_zipfian(13, 100, 0.5)
-\set i random_zipfian(14, 100, 0.5)
-\set i random_zipfian(15, 100, 0.5)
-\set i random_zipfian(16, 100, 0.5)
-}
-	});
 
 # throttling
 pgbench(
@@ -868,20 +842,32 @@ pgbench(
 		qr{type: .*/001_pgbench_sleep},
 		qr{above the 1.0 ms latency limit: [01]/}
 	],
-	[qr{^$}i],
+	[qr{^$}],
 	'pgbench late throttling',
 	{ '001_pgbench_sleep' => q{\sleep 2ms} });
+
+# return a list of files from directory $dir matching regexpr $re
+# this works around glob portability and escaping issues
+sub list_files
+{
+	my ($dir, $re) = @_;
+	opendir my $dh, $dir or die "cannot opendir $dir: $!";
+	my @files = grep /$re/, readdir $dh;
+	closedir $dh or die "cannot closedir $dir: $!";
+	return map { $dir . '/' . $_ } @files;
+}
 
 # check log contents and cleanup
 sub check_pgbench_logs
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 
-	my ($prefix, $nb, $min, $max, $re) = @_;
+	my ($dir, $prefix, $nb, $min, $max, $re) = @_;
 
-	my @logs = glob "$prefix.*";
+	# $prefix is simple enough, thus does not need escaping
+	my @logs = list_files($dir, qr{^$prefix\..*$});
 	ok(@logs == $nb, "number of log files");
-	ok(grep(/^$prefix\.\d+(\.\d+)?$/, @logs) == $nb, "file name format");
+	ok(grep(/\/$prefix\.\d+(\.\d+)?$/, @logs) == $nb, "file name format");
 
 	my $log_number = 0;
 	for my $log (sort @logs)
@@ -905,22 +891,22 @@ my $bdir = $node->basedir;
 
 # with sampling rate
 pgbench(
-	"-n -S -t 50 -c 2 --log --log-prefix=$bdir/001_pgbench_log_2 --sampling-rate=0.5",
-	0,
-	[ qr{select only}, qr{processed: 100/100} ],
-	[qr{^$}],
-	'pgbench logs');
+	"-n -S -t 50 -c 2 --log --sampling-rate=0.5", 0,
+	[ qr{select only}, qr{processed: 100/100} ], [qr{^$}],
+	'pgbench logs', undef,
+	"--log-prefix=$bdir/001_pgbench_log_2");
 
-check_pgbench_logs("$bdir/001_pgbench_log_2", 1, 8, 92,
+check_pgbench_logs($bdir, '001_pgbench_log_2', 1, 8, 92,
 	qr{^0 \d{1,2} \d+ \d \d+ \d+$});
 
 # check log file in some detail
 pgbench(
-	"-n -b se -t 10 -l --log-prefix=$bdir/001_pgbench_log_3",
-	0, [ qr{select only}, qr{processed: 10/10} ],
-	[qr{^$}], 'pgbench logs contents');
+	"-n -b se -t 10 -l", 0,
+	[ qr{select only}, qr{processed: 10/10} ], [qr{^$}],
+	'pgbench logs contents', undef,
+	"--log-prefix=$bdir/001_pgbench_log_3");
 
-check_pgbench_logs("$bdir/001_pgbench_log_3", 1, 10, 10,
+check_pgbench_logs($bdir, '001_pgbench_log_3', 1, 10, 10,
 	qr{^\d \d{1,2} \d+ \d \d+ \d+$});
 
 # done

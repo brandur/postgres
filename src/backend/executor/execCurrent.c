@@ -25,7 +25,7 @@
 
 static char *fetch_cursor_param_value(ExprContext *econtext, int paramId);
 static ScanState *search_plan_tree(PlanState *node, Oid table_oid,
-				 bool *pending_rescan);
+								   bool *pending_rescan);
 
 
 /*
@@ -204,7 +204,7 @@ execCurrentOf(CurrentOfExpr *cexpr,
 			 */
 			IndexScanDesc scan = ((IndexOnlyScanState *) scanstate)->ioss_ScanDesc;
 
-			*current_tid = scan->xs_ctup.t_self;
+			*current_tid = scan->xs_heaptid;
 		}
 		else
 		{

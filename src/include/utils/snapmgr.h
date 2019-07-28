@@ -13,6 +13,7 @@
 #ifndef SNAPMGR_H
 #define SNAPMGR_H
 
+#include "access/transam.h"
 #include "fmgr.h"
 #include "utils/relcache.h"
 #include "utils/resowner.h"
@@ -122,6 +123,8 @@ extern void UnregisterSnapshot(Snapshot snapshot);
 extern Snapshot RegisterSnapshotOnOwner(Snapshot snapshot, ResourceOwner owner);
 extern void UnregisterSnapshotFromOwner(Snapshot snapshot, ResourceOwner owner);
 
+extern FullTransactionId GetFullRecentGlobalXmin(void);
+
 extern void AtSubCommit_Snapshot(int level);
 extern void AtSubAbort_Snapshot(int level);
 extern void AtEOXact_Snapshot(bool isCommit, bool resetXmin);
@@ -131,9 +134,9 @@ extern bool XactHasExportedSnapshots(void);
 extern void DeleteAllExportedSnapshotFiles(void);
 extern bool ThereAreNoPriorRegisteredSnapshots(void);
 extern TransactionId TransactionIdLimitedForOldSnapshots(TransactionId recentXmin,
-									Relation relation);
+														 Relation relation);
 extern void MaintainOldSnapshotTimeMapping(TimestampTz whenTaken,
-							   TransactionId xmin);
+										   TransactionId xmin);
 
 extern char *ExportSnapshot(Snapshot snapshot);
 

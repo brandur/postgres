@@ -40,6 +40,7 @@
 #include "pg_upgrade.h"
 #include "catalog/pg_class_d.h"
 #include "common/file_perm.h"
+#include "common/logging.h"
 #include "common/restricted_token.h"
 #include "fe_utils/string_utils.h"
 
@@ -78,6 +79,7 @@ main(int argc, char **argv)
 	char	   *deletion_script_file_name = NULL;
 	bool		live_check = false;
 
+	pg_logging_init(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_upgrade"));
 
 	/* Set default restrictive mask until new cluster permissions are read */
@@ -85,7 +87,7 @@ main(int argc, char **argv)
 
 	parseCommandLine(argc, argv);
 
-	get_restricted_token(os_info.progname);
+	get_restricted_token();
 
 	adjust_data_dir(&old_cluster);
 	adjust_data_dir(&new_cluster);
@@ -202,13 +204,28 @@ main(int argc, char **argv)
 static void
 setup(char *argv0, bool *live_check)
 {
-	char		exec_path[MAXPGPATH];	/* full path to my executable */
-
 	/*
 	 * make sure the user has a clean environment, otherwise, we may confuse
 	 * libpq when we connect to one (or both) of the servers.
 	 */
 	check_pghost_envvar();
+
+	/*
+	 * In case the user hasn't specified the directory for the new binaries
+	 * with -B, default to using the path of the currently executed pg_upgrade
+	 * binary.
+	 */
+	if (!new_cluster.bindir)
+	{
+		char		exec_path[MAXPGPATH];
+
+		if (find_my_exec(argv0, exec_path) < 0)
+			pg_fatal("%s: could not find own program executable\n", argv0);
+		/* Trim off program name and keep just path */
+		*last_dir_separator(exec_path) = '\0';
+		canonicalize_path(exec_path);
+		new_cluster.bindir = pg_strdup(exec_path);
+	}
 
 	verify_directories();
 
@@ -245,15 +262,6 @@ setup(char *argv0, bool *live_check)
 			pg_fatal("There seems to be a postmaster servicing the new cluster.\n"
 					 "Please shutdown that postmaster and try again.\n");
 	}
-
-	/* get path to pg_upgrade executable */
-	if (find_my_exec(argv0, exec_path) < 0)
-		pg_fatal("%s: could not find own program executable\n", argv0);
-
-	/* Trim off program name and keep just path */
-	*last_dir_separator(exec_path) = '\0';
-	canonicalize_path(exec_path);
-	os_info.exec_path = pg_strdup(exec_path);
 }
 
 
@@ -262,7 +270,7 @@ prepare_new_cluster(void)
 {
 	/*
 	 * It would make more sense to freeze after loading the schema, but that
-	 * would cause us to lose the frozenids restored by the load. We use
+	 * would cause us to lose the frozenxids restored by the load. We use
 	 * --analyze so autovacuum doesn't update statistics later
 	 */
 	prep_status("Analyzing all rows in the new cluster");

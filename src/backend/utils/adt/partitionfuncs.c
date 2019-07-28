@@ -35,17 +35,17 @@ static bool
 check_rel_can_be_partition(Oid relid)
 {
 	char		relkind;
+	bool		relispartition;
 
 	/* Check if relation exists */
 	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
 		return false;
 
 	relkind = get_rel_relkind(relid);
+	relispartition = get_rel_relispartition(relid);
 
 	/* Only allow relation types that can appear in partition trees. */
-	if (relkind != RELKIND_RELATION &&
-		relkind != RELKIND_FOREIGN_TABLE &&
-		relkind != RELKIND_INDEX &&
+	if (!relispartition &&
 		relkind != RELKIND_PARTITIONED_TABLE &&
 		relkind != RELKIND_PARTITIONED_INDEX)
 		return false;
@@ -67,20 +67,19 @@ pg_partition_tree(PG_FUNCTION_ARGS)
 #define PG_PARTITION_TREE_COLS	4
 	Oid			rootrelid = PG_GETARG_OID(0);
 	FuncCallContext *funcctx;
-	ListCell  **next;
-
-	if (!check_rel_can_be_partition(rootrelid))
-		PG_RETURN_NULL();
+	List	   *partitions;
 
 	/* stuff done only on the first call of the function */
 	if (SRF_IS_FIRSTCALL())
 	{
 		MemoryContext oldcxt;
 		TupleDesc	tupdesc;
-		List	   *partitions;
 
 		/* create a function context for cross-call persistence */
 		funcctx = SRF_FIRSTCALL_INIT();
+
+		if (!check_rel_can_be_partition(rootrelid))
+			SRF_RETURN_DONE(funcctx);
 
 		/* switch to memory context appropriate for multiple function calls */
 		oldcxt = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
@@ -103,29 +102,27 @@ pg_partition_tree(PG_FUNCTION_ARGS)
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
-		/* allocate memory for user context */
-		next = (ListCell **) palloc(sizeof(ListCell *));
-		*next = list_head(partitions);
-		funcctx->user_fctx = (void *) next;
+		/* The only state we need is the partition list */
+		funcctx->user_fctx = (void *) partitions;
 
 		MemoryContextSwitchTo(oldcxt);
 	}
 
 	/* stuff done on every call of the function */
 	funcctx = SRF_PERCALL_SETUP();
-	next = (ListCell **) funcctx->user_fctx;
+	partitions = (List *) funcctx->user_fctx;
 
-	if (*next != NULL)
+	if (funcctx->call_cntr < list_length(partitions))
 	{
 		Datum		result;
 		Datum		values[PG_PARTITION_TREE_COLS];
 		bool		nulls[PG_PARTITION_TREE_COLS];
 		HeapTuple	tuple;
 		Oid			parentid = InvalidOid;
-		Oid			relid = lfirst_oid(*next);
+		Oid			relid = list_nth_oid(partitions, funcctx->call_cntr);
 		char		relkind = get_rel_relkind(relid);
 		int			level = 0;
-		List	   *ancestors = get_partition_ancestors(lfirst_oid(*next));
+		List	   *ancestors = get_partition_ancestors(relid);
 		ListCell   *lc;
 
 		/*
@@ -161,8 +158,6 @@ pg_partition_tree(PG_FUNCTION_ARGS)
 		}
 		values[3] = Int32GetDatum(level);
 
-		*next = lnext(*next);
-
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		result = HeapTupleGetDatum(tuple);
 		SRF_RETURN_NEXT(funcctx, result);
@@ -189,15 +184,16 @@ pg_partition_root(PG_FUNCTION_ARGS)
 	if (!check_rel_can_be_partition(relid))
 		PG_RETURN_NULL();
 
+	/* fetch the list of ancestors */
+	ancestors = get_partition_ancestors(relid);
+
 	/*
-	 * If the relation is not a partition (it may be the partition parent),
-	 * return itself as a result.
+	 * If the input relation is already the top-most parent, just return
+	 * itself.
 	 */
-	if (!get_rel_relispartition(relid))
+	if (ancestors == NIL)
 		PG_RETURN_OID(relid);
 
-	/* Fetch the top-most parent */
-	ancestors = get_partition_ancestors(relid);
 	rootrelid = llast_oid(ancestors);
 	list_free(ancestors);
 
@@ -207,4 +203,50 @@ pg_partition_root(PG_FUNCTION_ARGS)
 	 */
 	Assert(OidIsValid(rootrelid));
 	PG_RETURN_OID(rootrelid);
+}
+
+/*
+ * pg_partition_ancestors
+ *
+ * Produces a view with one row per ancestor of the given partition,
+ * including the input relation itself.
+ */
+Datum
+pg_partition_ancestors(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	FuncCallContext *funcctx;
+	List	   *ancestors;
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		MemoryContext oldcxt;
+
+		funcctx = SRF_FIRSTCALL_INIT();
+
+		if (!check_rel_can_be_partition(relid))
+			SRF_RETURN_DONE(funcctx);
+
+		oldcxt = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		ancestors = get_partition_ancestors(relid);
+		ancestors = lcons_oid(relid, ancestors);
+
+		/* The only state we need is the ancestors list */
+		funcctx->user_fctx = (void *) ancestors;
+
+		MemoryContextSwitchTo(oldcxt);
+	}
+
+	funcctx = SRF_PERCALL_SETUP();
+	ancestors = (List *) funcctx->user_fctx;
+
+	if (funcctx->call_cntr < list_length(ancestors))
+	{
+		Oid			relid = list_nth_oid(ancestors, funcctx->call_cntr);
+
+		SRF_RETURN_NEXT(funcctx, ObjectIdGetDatum(relid));
+	}
+
+	SRF_RETURN_DONE(funcctx);
 }

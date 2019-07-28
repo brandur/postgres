@@ -26,17 +26,18 @@
 #include "replication/origin.h"
 
 #ifndef FRONTEND
+#include "miscadmin.h"
 #include "utils/memutils.h"
 #endif
 
 static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
-					  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
+								  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
 static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
-				XLogRecPtr recptr);
-static int ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
-				 int reqLen);
+							XLogRecPtr recptr);
+static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
+							 int reqLen);
 static void report_invalid_record(XLogReaderState *state, const char *fmt,...) pg_attribute_printf(2, 3);
 
 static void ResetDecoder(XLogReaderState *state);
@@ -536,7 +537,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 
 	/* check whether we have all the requested data already */
 	if (targetSegNo == state->readSegNo && targetPageOff == state->readOff &&
-		reqLen < state->readLen)
+		reqLen <= state->readLen)
 		return state->readLen;
 
 	/*
@@ -783,20 +784,10 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 		if (state->system_identifier &&
 			longhdr->xlp_sysid != state->system_identifier)
 		{
-			char		fhdrident_str[32];
-			char		sysident_str[32];
-
-			/*
-			 * Format sysids separately to keep platform-dependent format code
-			 * out of the translatable message string.
-			 */
-			snprintf(fhdrident_str, sizeof(fhdrident_str), UINT64_FORMAT,
-					 longhdr->xlp_sysid);
-			snprintf(sysident_str, sizeof(sysident_str), UINT64_FORMAT,
-					 state->system_identifier);
 			report_invalid_record(state,
-								  "WAL file is from different database system: WAL file database system identifier is %s, pg_control database system identifier is %s",
-								  fhdrident_str, sysident_str);
+								  "WAL file is from different database system: WAL file database system identifier is %llu, pg_control database system identifier is %llu",
+								  (unsigned long long) longhdr->xlp_sysid,
+								  (unsigned long long) state->system_identifier);
 			return false;
 		}
 		else if (longhdr->xlp_seg_size != state->wal_segment_size)
@@ -1425,7 +1416,7 @@ RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page)
 	{
 		/* If a backup block image is compressed, decompress it */
 		if (pglz_decompress(ptr, bkpb->bimg_len, tmp.data,
-							BLCKSZ - bkpb->hole_length) < 0)
+							BLCKSZ - bkpb->hole_length, true) < 0)
 		{
 			report_invalid_record(record, "invalid compressed image at %X/%X, block %d",
 								  (uint32) (record->ReadRecPtr >> 32),
@@ -1453,3 +1444,37 @@ RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page)
 
 	return true;
 }
+
+#ifndef FRONTEND
+
+/*
+ * Extract the FullTransactionId from a WAL record.
+ */
+FullTransactionId
+XLogRecGetFullXid(XLogReaderState *record)
+{
+	TransactionId	xid,
+					next_xid;
+	uint32			epoch;
+
+	/*
+	 * This function is only safe during replay, because it depends on the
+	 * replay state.  See AdvanceNextFullTransactionIdPastXid() for more.
+	 */
+	Assert(AmStartupProcess() || !IsUnderPostmaster);
+
+	xid = XLogRecGetXid(record);
+	next_xid = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
+	epoch = EpochFromFullTransactionId(ShmemVariableCache->nextFullXid);
+
+	/*
+	 * If xid is numerically greater than next_xid, it has to be from the
+	 * last epoch.
+	 */
+	if (unlikely(xid > next_xid))
+		--epoch;
+
+	return FullTransactionIdFromEpochAndXid(epoch, xid);
+};
+
+#endif

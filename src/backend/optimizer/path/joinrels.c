@@ -15,9 +15,7 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
-#include "nodes/nodeFuncs.h"
 #include "optimizer/appendinfo.h"
-#include "optimizer/clauses.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
@@ -27,31 +25,29 @@
 
 
 static void make_rels_by_clause_joins(PlannerInfo *root,
-						  RelOptInfo *old_rel,
-						  ListCell *other_rels);
+									  RelOptInfo *old_rel,
+									  List *other_rels_list,
+									  ListCell *other_rels);
 static void make_rels_by_clauseless_joins(PlannerInfo *root,
-							  RelOptInfo *old_rel,
-							  ListCell *other_rels);
+										  RelOptInfo *old_rel,
+										  List *other_rels);
 static bool has_join_restriction(PlannerInfo *root, RelOptInfo *rel);
 static bool has_legal_joinclause(PlannerInfo *root, RelOptInfo *rel);
-static bool is_dummy_rel(RelOptInfo *rel);
 static bool restriction_is_constant_false(List *restrictlist,
-							  RelOptInfo *joinrel,
-							  bool only_pushed_down);
+										  RelOptInfo *joinrel,
+										  bool only_pushed_down);
 static void populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
-							RelOptInfo *rel2, RelOptInfo *joinrel,
-							SpecialJoinInfo *sjinfo, List *restrictlist);
+										RelOptInfo *rel2, RelOptInfo *joinrel,
+										SpecialJoinInfo *sjinfo, List *restrictlist);
 static void try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1,
-					   RelOptInfo *rel2, RelOptInfo *joinrel,
-					   SpecialJoinInfo *parent_sjinfo,
-					   List *parent_restrictlist);
-static void update_child_rel_info(PlannerInfo *root,
-					  RelOptInfo *rel, RelOptInfo *childrel);
+								   RelOptInfo *rel2, RelOptInfo *joinrel,
+								   SpecialJoinInfo *parent_sjinfo,
+								   List *parent_restrictlist);
 static SpecialJoinInfo *build_child_join_sjinfo(PlannerInfo *root,
-						SpecialJoinInfo *parent_sjinfo,
-						Relids left_relids, Relids right_relids);
-static int match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel,
-							 bool strict_op);
+												SpecialJoinInfo *parent_sjinfo,
+												Relids left_relids, Relids right_relids);
+static int	match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel,
+										 bool strict_op);
 
 
 /*
@@ -106,15 +102,23 @@ join_search_one_level(PlannerInfo *root, int level)
 			 * to each initial rel they don't already include but have a join
 			 * clause or restriction with.
 			 */
+			List	   *other_rels_list;
 			ListCell   *other_rels;
 
 			if (level == 2)		/* consider remaining initial rels */
-				other_rels = lnext(r);
+			{
+				other_rels_list = joinrels[level - 1];
+				other_rels = lnext(other_rels_list, r);
+			}
 			else				/* consider all initial rels */
-				other_rels = list_head(joinrels[1]);
+			{
+				other_rels_list = joinrels[1];
+				other_rels = list_head(other_rels_list);
+			}
 
 			make_rels_by_clause_joins(root,
 									  old_rel,
+									  other_rels_list,
 									  other_rels);
 		}
 		else
@@ -133,7 +137,7 @@ join_search_one_level(PlannerInfo *root, int level)
 			 */
 			make_rels_by_clauseless_joins(root,
 										  old_rel,
-										  list_head(joinrels[1]));
+										  joinrels[1]);
 		}
 	}
 
@@ -159,6 +163,7 @@ join_search_one_level(PlannerInfo *root, int level)
 		foreach(r, joinrels[k])
 		{
 			RelOptInfo *old_rel = (RelOptInfo *) lfirst(r);
+			List	   *other_rels_list;
 			ListCell   *other_rels;
 			ListCell   *r2;
 
@@ -172,11 +177,18 @@ join_search_one_level(PlannerInfo *root, int level)
 				continue;
 
 			if (k == other_level)
-				other_rels = lnext(r);	/* only consider remaining rels */
+			{
+				/* only consider remaining rels */
+				other_rels_list = joinrels[k];
+				other_rels = lnext(other_rels_list, r);
+			}
 			else
-				other_rels = list_head(joinrels[other_level]);
+			{
+				other_rels_list = joinrels[other_level];
+				other_rels = list_head(other_rels_list);
+			}
 
-			for_each_cell(r2, other_rels)
+			for_each_cell(r2, other_rels_list, other_rels)
 			{
 				RelOptInfo *new_rel = (RelOptInfo *) lfirst(r2);
 
@@ -228,7 +240,7 @@ join_search_one_level(PlannerInfo *root, int level)
 
 			make_rels_by_clauseless_joins(root,
 										  old_rel,
-										  list_head(joinrels[1]));
+										  joinrels[1]);
 		}
 
 		/*----------
@@ -270,8 +282,9 @@ join_search_one_level(PlannerInfo *root, int level)
  * automatically ensures that each new joinrel is only added to the list once.
  *
  * 'old_rel' is the relation entry for the relation to be joined
- * 'other_rels': the first cell in a linked list containing the other
+ * 'other_rels_list': a list containing the other
  * rels to be considered for joining
+ * 'other_rels': the first cell to be considered
  *
  * Currently, this is only used with initial rels in other_rels, but it
  * will work for joining to joinrels too.
@@ -279,11 +292,12 @@ join_search_one_level(PlannerInfo *root, int level)
 static void
 make_rels_by_clause_joins(PlannerInfo *root,
 						  RelOptInfo *old_rel,
+						  List *other_rels_list,
 						  ListCell *other_rels)
 {
 	ListCell   *l;
 
-	for_each_cell(l, other_rels)
+	for_each_cell(l, other_rels_list, other_rels)
 	{
 		RelOptInfo *other_rel = (RelOptInfo *) lfirst(l);
 
@@ -304,8 +318,7 @@ make_rels_by_clause_joins(PlannerInfo *root,
  *	  The join rels are returned in root->join_rel_level[join_cur_level].
  *
  * 'old_rel' is the relation entry for the relation to be joined
- * 'other_rels': the first cell of a linked list containing the
- * other rels to be considered for joining
+ * 'other_rels': a list containing the other rels to be considered for joining
  *
  * Currently, this is only used with initial rels in other_rels, but it would
  * work for joining to joinrels too.
@@ -313,11 +326,11 @@ make_rels_by_clause_joins(PlannerInfo *root,
 static void
 make_rels_by_clauseless_joins(PlannerInfo *root,
 							  RelOptInfo *old_rel,
-							  ListCell *other_rels)
+							  List *other_rels)
 {
 	ListCell   *l;
 
-	for_each_cell(l, other_rels)
+	foreach(l, other_rels)
 	{
 		RelOptInfo *other_rel = (RelOptInfo *) lfirst(l);
 
@@ -628,20 +641,15 @@ join_is_legal(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 				{
 					SpecialJoinInfo *sjinfo = (SpecialJoinInfo *) lfirst(l);
 
+					/* ignore full joins --- their ordering is predetermined */
+					if (sjinfo->jointype == JOIN_FULL)
+						continue;
+
 					if (bms_overlap(sjinfo->min_lefthand, join_plus_rhs) &&
 						!bms_is_subset(sjinfo->min_righthand, join_plus_rhs))
 					{
 						join_plus_rhs = bms_add_members(join_plus_rhs,
 														sjinfo->min_righthand);
-						more = true;
-					}
-					/* full joins constrain both sides symmetrically */
-					if (sjinfo->jointype == JOIN_FULL &&
-						bms_overlap(sjinfo->min_righthand, join_plus_rhs) &&
-						!bms_is_subset(sjinfo->min_lefthand, join_plus_rhs))
-					{
-						join_plus_rhs = bms_add_members(join_plus_rhs,
-														sjinfo->min_lefthand);
 						more = true;
 					}
 				}
@@ -1196,10 +1204,38 @@ have_dangerous_phv(PlannerInfo *root,
 /*
  * is_dummy_rel --- has relation been proven empty?
  */
-static bool
+bool
 is_dummy_rel(RelOptInfo *rel)
 {
-	return IS_DUMMY_REL(rel);
+	Path	   *path;
+
+	/*
+	 * A rel that is known dummy will have just one path that is a childless
+	 * Append.  (Even if somehow it has more paths, a childless Append will
+	 * have cost zero and hence should be at the front of the pathlist.)
+	 */
+	if (rel->pathlist == NIL)
+		return false;
+	path = (Path *) linitial(rel->pathlist);
+
+	/*
+	 * Initially, a dummy path will just be a childless Append.  But in later
+	 * planning stages we might stick a ProjectSetPath and/or ProjectionPath
+	 * on top, since Append can't project.  Rather than make assumptions about
+	 * which combinations can occur, just descend through whatever we find.
+	 */
+	for (;;)
+	{
+		if (IsA(path, ProjectionPath))
+			path = ((ProjectionPath *) path)->subpath;
+		else if (IsA(path, ProjectSetPath))
+			path = ((ProjectSetPath *) path)->subpath;
+		else
+			break;
+	}
+	if (IS_DUMMY_APPEND(path))
+		return true;
+	return false;
 }
 
 /*
@@ -1237,7 +1273,8 @@ mark_dummy_rel(RelOptInfo *rel)
 	rel->partial_pathlist = NIL;
 
 	/* Set up the dummy path */
-	add_path(rel, (Path *) create_append_path(NULL, rel, NIL, NIL, NULL,
+	add_path(rel, (Path *) create_append_path(NULL, rel, NIL, NIL,
+											  NIL, rel->lateral_relids,
 											  0, false, NIL, -1));
 
 	/* Set or update cheapest_total_path and related fields */
@@ -1377,6 +1414,10 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 	{
 		RelOptInfo *child_rel1 = rel1->part_rels[cnt_parts];
 		RelOptInfo *child_rel2 = rel2->part_rels[cnt_parts];
+		bool		rel1_empty = (child_rel1 == NULL ||
+								  IS_DUMMY_REL(child_rel1));
+		bool		rel2_empty = (child_rel2 == NULL ||
+								  IS_DUMMY_REL(child_rel2));
 		SpecialJoinInfo *child_sjinfo;
 		List	   *child_restrictlist;
 		RelOptInfo *child_joinrel;
@@ -1385,24 +1426,69 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		int			nappinfos;
 
 		/*
-		 * If a child table has consider_partitionwise_join=false, it means
+		 * Check for cases where we can prove that this segment of the join
+		 * returns no rows, due to one or both inputs being empty (including
+		 * inputs that have been pruned away entirely).  If so just ignore it.
+		 * These rules are equivalent to populate_joinrel_with_paths's rules
+		 * for dummy input relations.
+		 */
+		switch (parent_sjinfo->jointype)
+		{
+			case JOIN_INNER:
+			case JOIN_SEMI:
+				if (rel1_empty || rel2_empty)
+					continue;	/* ignore this join segment */
+				break;
+			case JOIN_LEFT:
+			case JOIN_ANTI:
+				if (rel1_empty)
+					continue;	/* ignore this join segment */
+				break;
+			case JOIN_FULL:
+				if (rel1_empty && rel2_empty)
+					continue;	/* ignore this join segment */
+				break;
+			default:
+				/* other values not expected here */
+				elog(ERROR, "unrecognized join type: %d",
+					 (int) parent_sjinfo->jointype);
+				break;
+		}
+
+		/*
+		 * If a child has been pruned entirely then we can't generate paths
+		 * for it, so we have to reject partitionwise joining unless we were
+		 * able to eliminate this partition above.
+		 */
+		if (child_rel1 == NULL || child_rel2 == NULL)
+		{
+			/*
+			 * Mark the joinrel as unpartitioned so that later functions treat
+			 * it correctly.
+			 */
+			joinrel->nparts = 0;
+			return;
+		}
+
+		/*
+		 * If a leaf relation has consider_partitionwise_join=false, it means
 		 * that it's a dummy relation for which we skipped setting up tlist
-		 * expressions and adding EC members in set_append_rel_size(), so do
-		 * that now for use later.
+		 * expressions and adding EC members in set_append_rel_size(), so
+		 * again we have to fail here.
 		 */
 		if (rel1_is_simple && !child_rel1->consider_partitionwise_join)
 		{
 			Assert(child_rel1->reloptkind == RELOPT_OTHER_MEMBER_REL);
 			Assert(IS_DUMMY_REL(child_rel1));
-			update_child_rel_info(root, rel1, child_rel1);
-			child_rel1->consider_partitionwise_join = true;
+			joinrel->nparts = 0;
+			return;
 		}
 		if (rel2_is_simple && !child_rel2->consider_partitionwise_join)
 		{
 			Assert(child_rel2->reloptkind == RELOPT_OTHER_MEMBER_REL);
 			Assert(IS_DUMMY_REL(child_rel2));
-			update_child_rel_info(root, rel2, child_rel2);
-			child_rel2->consider_partitionwise_join = true;
+			joinrel->nparts = 0;
+			return;
 		}
 
 		/* We should never try to join two overlapping sets of rels. */
@@ -1444,28 +1530,6 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 									child_joinrel, child_sjinfo,
 									child_restrictlist);
 	}
-}
-
-/*
- * Set up tlist expressions for the childrel, and add EC members referencing
- * the childrel.
- */
-static void
-update_child_rel_info(PlannerInfo *root,
-					  RelOptInfo *rel, RelOptInfo *childrel)
-{
-	AppendRelInfo *appinfo = root->append_rel_array[childrel->relid];
-
-	/* Make child tlist expressions */
-	childrel->reltarget->exprs = (List *)
-		adjust_appendrel_attrs(root,
-							   (Node *) rel->reltarget->exprs,
-							   1, &appinfo);
-
-	/* Make child entries in the EquivalenceClass as well */
-	if (rel->has_eclass_joins || has_useful_pathkeys(root, rel))
-		add_child_rel_equivalences(root, appinfo, rel, childrel);
-	childrel->has_eclass_joins = rel->has_eclass_joins;
 }
 
 /*

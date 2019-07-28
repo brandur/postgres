@@ -341,7 +341,7 @@ lo_write(PGconn *conn, int fd, const char *buf, size_t len)
 
 	argv[1].isint = 0;
 	argv[1].len = (int) len;
-	argv[1].u.ptr = (int *) buf;
+	argv[1].u.ptr = (int *) unconstify(char *, buf);
 
 	res = PQfn(conn, conn->lobjfuncs->fn_lo_write,
 			   &retval, &result_len, 1, argv, 2);
@@ -853,7 +853,7 @@ lo_export(PGconn *conn, Oid lobjId, const char *filename)
 	}
 
 	/* if we already failed, don't overwrite that msg with a close error */
-	if (close(fd) && result >= 0)
+	if (close(fd) != 0 && result >= 0)
 	{
 		printfPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("could not write to file \"%s\": %s\n"),

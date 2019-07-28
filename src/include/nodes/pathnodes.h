@@ -61,7 +61,7 @@ typedef struct AggClauseCosts
 	bool		hasNonPartial;	/* does any agg not support partial mode? */
 	bool		hasNonSerial;	/* is any partial agg non-serializable? */
 	QualCost	transCost;		/* total per-input-row execution costs */
-	Cost		finalCost;		/* total per-aggregated-row costs */
+	QualCost	finalCost;		/* total per-aggregated-row costs */
 	Size		transitionSpace;	/* space for pass-by-ref transition data */
 } AggClauseCosts;
 
@@ -144,6 +144,8 @@ typedef struct PlannerGlobal
 	bool		parallelModeNeeded; /* parallel mode actually required? */
 
 	char		maxParallelHazard;	/* worst PROPARALLEL hazard level */
+
+	PartitionDirectory partition_directory; /* partition descriptors */
 } PlannerGlobal;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -263,6 +265,8 @@ struct PlannerInfo
 
 	List	   *eq_classes;		/* list of active EquivalenceClasses */
 
+	bool		ec_merging_done;	/* set true once ECs are canonical */
+
 	List	   *canon_pathkeys; /* list of "canonical" PathKeys */
 
 	List	   *left_join_clauses;	/* list of RestrictInfos for mergejoinable
@@ -278,6 +282,11 @@ struct PlannerInfo
 
 	List	   *join_info_list; /* list of SpecialJoinInfos */
 
+	/*
+	 * Note: for AppendRelInfos describing partitions of a partitioned table,
+	 * we guarantee that partitions that come earlier in the partitioned
+	 * table's PartitionDesc will appear earlier in append_rel_list.
+	 */
 	List	   *append_rel_list;	/* list of AppendRelInfos */
 
 	List	   *rowMarks;		/* list of PlanRowMarks */
@@ -305,8 +314,13 @@ struct PlannerInfo
 	struct PathTarget *upper_targets[UPPERREL_FINAL + 1];
 
 	/*
-	 * grouping_planner passes back its final processed targetlist here, for
-	 * use in relabeling the topmost tlist of the finished Plan.
+	 * The fully-processed targetlist is kept here.  It differs from
+	 * parse->targetList in that (for INSERT and UPDATE) it's been reordered
+	 * to match the target table, and defaults have been filled in.  Also,
+	 * additional resjunk targets may be present.  preprocess_targetlist()
+	 * does most of this work, but note that more resjunk targets can get
+	 * added during appendrel expansion.  (Hence, upper_targets mustn't get
+	 * set up till after that.)
 	 */
 	List	   *processed_tlist;
 
@@ -493,6 +507,8 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *		pages - number of disk pages in relation (zero if not a table)
  *		tuples - number of tuples in relation (not considering restrictions)
  *		allvisfrac - fraction of disk pages that are marked all-visible
+ *		eclass_indexes - EquivalenceClasses that mention this rel (filled
+ *						 only after EC merging is complete)
  *		subroot - PlannerInfo for subquery (NULL if it's not a subquery)
  *		subplan_params - list of PlannerParamItems to be passed to subquery
  *
@@ -666,6 +682,8 @@ typedef struct RelOptInfo
 	BlockNumber pages;			/* size estimates derived from pg_class */
 	double		tuples;
 	double		allvisfrac;
+	Bitmapset  *eclass_indexes; /* Indexes in PlannerInfo's eq_classes list of
+								 * ECs that mention this rel */
 	PlannerInfo *subroot;		/* if subquery */
 	List	   *subplan_params; /* if subquery */
 	int			rel_parallel_workers;	/* wanted number of parallel workers */
@@ -715,15 +733,12 @@ typedef struct RelOptInfo
  *
  * It's not enough to test whether rel->part_scheme is set, because it might
  * be that the basic partitioning properties of the input relations matched
- * but the partition bounds did not.
- *
- * We treat dummy relations as unpartitioned.  We could alternatively
- * treat them as partitioned, but it's not clear whether that's a useful thing
- * to do.
+ * but the partition bounds did not.  Also, if we are able to prove a rel
+ * dummy (empty), we should henceforth treat it as unpartitioned.
  */
 #define IS_PARTITIONED_REL(rel) \
 	((rel)->part_scheme && (rel)->boundinfo && (rel)->nparts > 0 && \
-	 (rel)->part_rels && !(IS_DUMMY_REL(rel)))
+	 (rel)->part_rels && !IS_DUMMY_REL(rel))
 
 /*
  * Convenience macro to make sure that a partitioned relation has all the
@@ -764,7 +779,12 @@ typedef struct RelOptInfo
  *		(by plancat.c), indrestrictinfo and predOK are set later, in
  *		check_index_predicates().
  */
-typedef struct IndexOptInfo
+#ifndef HAVE_INDEXOPTINFO_TYPEDEF
+typedef struct IndexOptInfo IndexOptInfo;
+#define HAVE_INDEXOPTINFO_TYPEDEF 1
+#endif
+
+struct IndexOptInfo
 {
 	NodeTag		type;
 
@@ -818,7 +838,7 @@ typedef struct IndexOptInfo
 	bool		amcanparallel;	/* does AM support parallel scan? */
 	/* Rather than include amapi.h here, we declare amcostestimate like this */
 	void		(*amcostestimate) ();	/* AM's cost estimator */
-} IndexOptInfo;
+};
 
 /*
  * ForeignKeyOptInfo
@@ -1123,30 +1143,16 @@ typedef struct Path
  *
  * 'indexinfo' is the index to be scanned.
  *
- * 'indexclauses' is a list of index qualification clauses, with implicit
- * AND semantics across the list.  Each clause is a RestrictInfo node from
- * the query's WHERE or JOIN conditions.  An empty list implies a full
- * index scan.
- *
- * 'indexquals' has the same structure as 'indexclauses', but it contains
- * the actual index qual conditions that can be used with the index.
- * In simple cases this is identical to 'indexclauses', but when special
- * indexable operators appear in 'indexclauses', they are replaced by the
- * derived indexscannable conditions in 'indexquals'.
- *
- * 'indexqualcols' is an integer list of index column numbers (zero-based)
- * of the same length as 'indexquals', showing which index column each qual
- * is meant to be used with.  'indexquals' is required to be ordered by
- * index column, so 'indexqualcols' must form a nondecreasing sequence.
- * (The order of multiple quals for the same index column is unspecified.)
+ * 'indexclauses' is a list of IndexClause nodes, each representing one
+ * index-checkable restriction, with implicit AND semantics across the list.
+ * An empty list implies a full index scan.
  *
  * 'indexorderbys', if not NIL, is a list of ORDER BY expressions that have
  * been found to be usable as ordering operators for an amcanorderbyop index.
  * The list must match the path's pathkeys, ie, one expression per pathkey
  * in the same order.  These are not RestrictInfos, just bare expressions,
- * since they generally won't yield booleans.  Also, unlike the case for
- * quals, it's guaranteed that each expression has the index key on the left
- * side of the operator.
+ * since they generally won't yield booleans.  It's guaranteed that each
+ * expression has the index key on the left side of the operator.
  *
  * 'indexorderbycols' is an integer list of index column numbers (zero-based)
  * of the same length as 'indexorderbys', showing which index column each
@@ -1172,14 +1178,56 @@ typedef struct IndexPath
 	Path		path;
 	IndexOptInfo *indexinfo;
 	List	   *indexclauses;
-	List	   *indexquals;
-	List	   *indexqualcols;
 	List	   *indexorderbys;
 	List	   *indexorderbycols;
 	ScanDirection indexscandir;
 	Cost		indextotalcost;
 	Selectivity indexselectivity;
 } IndexPath;
+
+/*
+ * Each IndexClause references a RestrictInfo node from the query's WHERE
+ * or JOIN conditions, and shows how that restriction can be applied to
+ * the particular index.  We support both indexclauses that are directly
+ * usable by the index machinery, which are typically of the form
+ * "indexcol OP pseudoconstant", and those from which an indexable qual
+ * can be derived.  The simplest such transformation is that a clause
+ * of the form "pseudoconstant OP indexcol" can be commuted to produce an
+ * indexable qual (the index machinery expects the indexcol to be on the
+ * left always).  Another example is that we might be able to extract an
+ * indexable range condition from a LIKE condition, as in "x LIKE 'foo%bar'"
+ * giving rise to "x >= 'foo' AND x < 'fop'".  Derivation of such lossy
+ * conditions is done by a planner support function attached to the
+ * indexclause's top-level function or operator.
+ *
+ * indexquals is a list of RestrictInfos for the directly-usable index
+ * conditions associated with this IndexClause.  In the simplest case
+ * it's a one-element list whose member is iclause->rinfo.  Otherwise,
+ * it contains one or more directly-usable indexqual conditions extracted
+ * from the given clause.  The 'lossy' flag indicates whether the
+ * indexquals are semantically equivalent to the original clause, or
+ * represent a weaker condition.
+ *
+ * Normally, indexcol is the index of the single index column the clause
+ * works on, and indexcols is NIL.  But if the clause is a RowCompareExpr,
+ * indexcol is the index of the leading column, and indexcols is a list of
+ * all the affected columns.  (Note that indexcols matches up with the
+ * columns of the actual indexable RowCompareExpr in indexquals, which
+ * might be different from the original in rinfo.)
+ *
+ * An IndexPath's IndexClause list is required to be ordered by index
+ * column, i.e. the indexcol values must form a nondecreasing sequence.
+ * (The order of multiple clauses for the same index column is unspecified.)
+ */
+typedef struct IndexClause
+{
+	NodeTag		type;
+	struct RestrictInfo *rinfo; /* original restriction or join clause */
+	List	   *indexquals;		/* indexqual(s) derived from it */
+	bool		lossy;			/* are indexquals a lossy version of clause? */
+	AttrNumber	indexcol;		/* index column the clause uses (zero-based) */
+	List	   *indexcols;		/* multiple index columns, if RowCompare */
+} IndexClause;
 
 /*
  * BitmapHeapPath represents one or more indexscans that generate TID bitmaps
@@ -1316,6 +1364,9 @@ typedef struct CustomPath
  * elements.  These cases are optimized during create_append_plan.
  * In particular, an AppendPath with no subpaths is a "dummy" path that
  * is created to represent the case that a relation is provably empty.
+ * (This is a convenient representation because it means that when we build
+ * an appendrel and find that all its children have been excluded, no extra
+ * action is needed to recognize the relation as dummy.)
  */
 typedef struct AppendPath
 {
@@ -1323,18 +1374,21 @@ typedef struct AppendPath
 	/* RT indexes of non-leaf tables in a partition tree */
 	List	   *partitioned_rels;
 	List	   *subpaths;		/* list of component Paths */
-
-	/* Index of first partial path in subpaths */
+	/* Index of first partial path in subpaths; list_length(subpaths) if none */
 	int			first_partial_path;
+	double		limit_tuples;	/* hard limit on output tuples, or -1 */
 } AppendPath;
 
-#define IS_DUMMY_PATH(p) \
+#define IS_DUMMY_APPEND(p) \
 	(IsA((p), AppendPath) && ((AppendPath *) (p))->subpaths == NIL)
 
-/* A relation that's been proven empty will have one path that is dummy */
-#define IS_DUMMY_REL(r) \
-	((r)->cheapest_total_path != NULL && \
-	 IS_DUMMY_PATH((r)->cheapest_total_path))
+/*
+ * A relation that's been proven empty will have one path that is dummy
+ * (but might have projection paths on top).  For historical reasons,
+ * this is provided as a macro that wraps is_dummy_rel().
+ */
+#define IS_DUMMY_REL(r) is_dummy_rel(r)
+extern bool is_dummy_rel(RelOptInfo *rel);
 
 /*
  * MergeAppendPath represents a MergeAppend plan, ie, the merging of sorted
@@ -1417,8 +1471,7 @@ typedef struct GatherPath
 
 /*
  * GatherMergePath runs several copies of a plan in parallel and collects
- * the results, preserving their common sort order.  For gather merge, the
- * parallel leader always executes the plan too, so we don't need single_copy.
+ * the results, preserving their common sort order.
  */
 typedef struct GatherMergePath
 {
@@ -2395,6 +2448,24 @@ typedef struct
 	List	   *targetList;
 	PartitionwiseAggregateType patype;
 } GroupPathExtraData;
+
+/*
+ * Struct for extra information passed to subroutines of grouping_planner
+ *
+ * limit_needed is true if we actually need a Limit plan node.
+ * limit_tuples is an estimated bound on the number of output tuples,
+ *		or -1 if no LIMIT or couldn't estimate.
+ * count_est and offset_est are the estimated values of the LIMIT and OFFSET
+ * 		expressions computed by preprocess_limit() (see comments for
+ * 		preprocess_limit() for more information).
+ */
+typedef struct
+{
+	bool		limit_needed;
+	double		limit_tuples;
+	int64		count_est;
+	int64		offset_est;
+} FinalPathExtraData;
 
 /*
  * For speed reasons, cost estimation for join paths is performed in two

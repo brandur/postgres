@@ -61,61 +61,61 @@ typedef struct reduce_outer_joins_state
 } reduce_outer_joins_state;
 
 static Node *pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
-								  Relids *relids);
+											   Relids *relids);
 static Node *pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
-							  Node **jtlink1, Relids available_rels1,
-							  Node **jtlink2, Relids available_rels2);
+										   Node **jtlink1, Relids available_rels1,
+										   Node **jtlink2, Relids available_rels2);
 static Node *pull_up_subqueries_recurse(PlannerInfo *root, Node *jtnode,
-						   JoinExpr *lowest_outer_join,
-						   JoinExpr *lowest_nulling_outer_join,
-						   AppendRelInfo *containing_appendrel);
+										JoinExpr *lowest_outer_join,
+										JoinExpr *lowest_nulling_outer_join,
+										AppendRelInfo *containing_appendrel);
 static Node *pull_up_simple_subquery(PlannerInfo *root, Node *jtnode,
-						RangeTblEntry *rte,
-						JoinExpr *lowest_outer_join,
-						JoinExpr *lowest_nulling_outer_join,
-						AppendRelInfo *containing_appendrel);
+									 RangeTblEntry *rte,
+									 JoinExpr *lowest_outer_join,
+									 JoinExpr *lowest_nulling_outer_join,
+									 AppendRelInfo *containing_appendrel);
 static Node *pull_up_simple_union_all(PlannerInfo *root, Node *jtnode,
-						 RangeTblEntry *rte);
+									  RangeTblEntry *rte);
 static void pull_up_union_leaf_queries(Node *setOp, PlannerInfo *root,
-						   int parentRTindex, Query *setOpQuery,
-						   int childRToffset);
+									   int parentRTindex, Query *setOpQuery,
+									   int childRToffset);
 static void make_setop_translation_list(Query *query, Index newvarno,
-							List **translated_vars);
+										List **translated_vars);
 static bool is_simple_subquery(Query *subquery, RangeTblEntry *rte,
-				   JoinExpr *lowest_outer_join);
+							   JoinExpr *lowest_outer_join);
 static Node *pull_up_simple_values(PlannerInfo *root, Node *jtnode,
-					  RangeTblEntry *rte);
+								   RangeTblEntry *rte);
 static bool is_simple_values(PlannerInfo *root, RangeTblEntry *rte);
 static bool is_simple_union_all(Query *subquery);
 static bool is_simple_union_all_recurse(Node *setOp, Query *setOpQuery,
-							List *colTypes);
+										List *colTypes);
 static bool is_safe_append_member(Query *subquery);
 static bool jointree_contains_lateral_outer_refs(Node *jtnode, bool restricted,
-									 Relids safe_upper_varnos);
+												 Relids safe_upper_varnos);
 static void replace_vars_in_jointree(Node *jtnode,
-						 pullup_replace_vars_context *context,
-						 JoinExpr *lowest_nulling_outer_join);
+									 pullup_replace_vars_context *context,
+									 JoinExpr *lowest_nulling_outer_join);
 static Node *pullup_replace_vars(Node *expr,
-					pullup_replace_vars_context *context);
+								 pullup_replace_vars_context *context);
 static Node *pullup_replace_vars_callback(Var *var,
-							 replace_rte_variables_context *context);
+										  replace_rte_variables_context *context);
 static Query *pullup_replace_vars_subquery(Query *query,
-							 pullup_replace_vars_context *context);
+										   pullup_replace_vars_context *context);
 static reduce_outer_joins_state *reduce_outer_joins_pass1(Node *jtnode);
 static void reduce_outer_joins_pass2(Node *jtnode,
-						 reduce_outer_joins_state *state,
-						 PlannerInfo *root,
-						 Relids nonnullable_rels,
-						 List *nonnullable_vars,
-						 List *forced_null_vars);
+									 reduce_outer_joins_state *state,
+									 PlannerInfo *root,
+									 Relids nonnullable_rels,
+									 List *nonnullable_vars,
+									 List *forced_null_vars);
 static Node *remove_useless_results_recurse(PlannerInfo *root, Node *jtnode);
 static int	get_result_relid(PlannerInfo *root, Node *jtnode);
 static void remove_result_refs(PlannerInfo *root, int varno, Node *newjtloc);
 static bool find_dependent_phvs(Node *node, int varno);
 static void substitute_phv_relids(Node *node,
-					  int varno, Relids subrelids);
+								  int varno, Relids subrelids);
 static void fix_append_rel_relids(List *append_rel_list, int varno,
-					  Relids subrelids);
+								  Relids subrelids);
 static Node *find_jointree_node_for_rel(Node *jtnode, int relid);
 
 
@@ -886,6 +886,7 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	subroot->cte_plan_ids = NIL;
 	subroot->multiexpr_params = NIL;
 	subroot->eq_classes = NIL;
+	subroot->ec_merging_done = false;
 	subroot->append_rel_list = NIL;
 	subroot->rowMarks = NIL;
 	memset(subroot->upper_rels, 0, sizeof(subroot->upper_rels));
@@ -2791,8 +2792,6 @@ void
 remove_useless_result_rtes(PlannerInfo *root)
 {
 	ListCell   *cell;
-	ListCell   *prev;
-	ListCell   *next;
 
 	/* Top level of jointree must always be a FromExpr */
 	Assert(IsA(root->parse->jointree, FromExpr));
@@ -2813,16 +2812,12 @@ remove_useless_result_rtes(PlannerInfo *root)
 	 * RTE_RESULT RTE; otherwise we'll generate a whole-row Var for the
 	 * RTE_RESULT, which the executor has no support for.
 	 */
-	prev = NULL;
-	for (cell = list_head(root->rowMarks); cell; cell = next)
+	foreach(cell, root->rowMarks)
 	{
 		PlanRowMark *rc = (PlanRowMark *) lfirst(cell);
 
-		next = lnext(cell);
 		if (rt_fetch(rc->rti, root->parse->rtable)->rtekind == RTE_RESULT)
-			root->rowMarks = list_delete_cell(root->rowMarks, cell, prev);
-		else
-			prev = cell;
+			root->rowMarks = foreach_delete_current(root->rowMarks, cell);
 	}
 }
 
@@ -2845,17 +2840,14 @@ remove_useless_results_recurse(PlannerInfo *root, Node *jtnode)
 		FromExpr   *f = (FromExpr *) jtnode;
 		Relids		result_relids = NULL;
 		ListCell   *cell;
-		ListCell   *prev;
-		ListCell   *next;
 
 		/*
 		 * We can drop RTE_RESULT rels from the fromlist so long as at least
 		 * one child remains, since joining to a one-row table changes
 		 * nothing.  The easiest way to mechanize this rule is to modify the
-		 * list in-place, using list_delete_cell.
+		 * list in-place.
 		 */
-		prev = NULL;
-		for (cell = list_head(f->fromlist); cell; cell = next)
+		foreach(cell, f->fromlist)
 		{
 			Node	   *child = (Node *) lfirst(cell);
 			int			varno;
@@ -2864,7 +2856,6 @@ remove_useless_results_recurse(PlannerInfo *root, Node *jtnode)
 			child = remove_useless_results_recurse(root, child);
 			/* ... and stick it back into the tree */
 			lfirst(cell) = child;
-			next = lnext(cell);
 
 			/*
 			 * If it's an RTE_RESULT with at least one sibling, we can drop
@@ -2874,11 +2865,9 @@ remove_useless_results_recurse(PlannerInfo *root, Node *jtnode)
 			if (list_length(f->fromlist) > 1 &&
 				(varno = get_result_relid(root, child)) != 0)
 			{
-				f->fromlist = list_delete_cell(f->fromlist, cell, prev);
+				f->fromlist = foreach_delete_current(f->fromlist, cell);
 				result_relids = bms_add_member(result_relids, varno);
 			}
-			else
-				prev = cell;
 		}
 
 		/*

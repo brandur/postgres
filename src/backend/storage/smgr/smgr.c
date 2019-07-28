@@ -17,9 +17,10 @@
  */
 #include "postgres.h"
 
-#include "commands/tablespace.h"
+#include "lib/ilist.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
+#include "storage/md.h"
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
@@ -39,6 +40,7 @@ typedef struct f_smgr
 {
 	void		(*smgr_init) (void);	/* may be NULL */
 	void		(*smgr_shutdown) (void);	/* may be NULL */
+	void		(*smgr_open) (SMgrRelation reln);
 	void		(*smgr_close) (SMgrRelation reln, ForkNumber forknum);
 	void		(*smgr_create) (SMgrRelation reln, ForkNumber forknum,
 								bool isRedo);
@@ -59,17 +61,14 @@ typedef struct f_smgr
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
-	void		(*smgr_pre_ckpt) (void);	/* may be NULL */
-	void		(*smgr_sync) (void);	/* may be NULL */
-	void		(*smgr_post_ckpt) (void);	/* may be NULL */
 } f_smgr;
-
 
 static const f_smgr smgrsw[] = {
 	/* magnetic disk */
 	{
 		.smgr_init = mdinit,
 		.smgr_shutdown = NULL,
+		.smgr_open = mdopen,
 		.smgr_close = mdclose,
 		.smgr_create = mdcreate,
 		.smgr_exists = mdexists,
@@ -82,14 +81,10 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
-		.smgr_pre_ckpt = mdpreckpt,
-		.smgr_sync = mdsync,
-		.smgr_post_ckpt = mdpostckpt
 	}
 };
 
 static const int NSmgr = lengthof(smgrsw);
-
 
 /*
  * Each backend has a hashtable that stores all extant SMgrRelation objects.
@@ -97,12 +92,10 @@ static const int NSmgr = lengthof(smgrsw);
  */
 static HTAB *SMgrRelationHash = NULL;
 
-static SMgrRelation first_unowned_reln = NULL;
+static dlist_head unowned_relns;
 
 /* local function prototypes */
 static void smgrshutdown(int code, Datum arg);
-static void add_to_unowned_list(SMgrRelation reln);
-static void remove_from_unowned_list(SMgrRelation reln);
 
 
 /*
@@ -165,7 +158,7 @@ smgropen(RelFileNode rnode, BackendId backend)
 		ctl.entrysize = sizeof(SMgrRelationData);
 		SMgrRelationHash = hash_create("smgr relation table", 400,
 									   &ctl, HASH_ELEM | HASH_BLOBS);
-		first_unowned_reln = NULL;
+		dlist_init(&unowned_relns);
 	}
 
 	/* Look up or create an entry */
@@ -178,8 +171,6 @@ smgropen(RelFileNode rnode, BackendId backend)
 	/* Initialize it if not present before */
 	if (!found)
 	{
-		int			forknum;
-
 		/* hash_search already filled in the lookup key */
 		reln->smgr_owner = NULL;
 		reln->smgr_targblock = InvalidBlockNumber;
@@ -187,12 +178,11 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->smgr_vm_nblocks = InvalidBlockNumber;
 		reln->smgr_which = 0;	/* we only have md.c at present */
 
-		/* mark it not open */
-		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-			reln->md_num_open_segs[forknum] = 0;
+		/* implementation-specific initialization */
+		smgrsw[reln->smgr_which].smgr_open(reln);
 
 		/* it has no owner yet */
-		add_to_unowned_list(reln);
+		dlist_push_tail(&unowned_relns, &reln->node);
 	}
 
 	return reln;
@@ -222,7 +212,7 @@ smgrsetowner(SMgrRelation *owner, SMgrRelation reln)
 	if (reln->smgr_owner)
 		*(reln->smgr_owner) = NULL;
 	else
-		remove_from_unowned_list(reln);
+		dlist_delete(&reln->node);
 
 	/* Now establish the ownership relationship. */
 	reln->smgr_owner = owner;
@@ -246,53 +236,8 @@ smgrclearowner(SMgrRelation *owner, SMgrRelation reln)
 	/* unset our reference to the owner */
 	reln->smgr_owner = NULL;
 
-	add_to_unowned_list(reln);
-}
-
-/*
- * add_to_unowned_list -- link an SMgrRelation onto the unowned list
- *
- * Check remove_from_unowned_list()'s comments for performance
- * considerations.
- */
-static void
-add_to_unowned_list(SMgrRelation reln)
-{
-	/* place it at head of the list (to make smgrsetowner cheap) */
-	reln->next_unowned_reln = first_unowned_reln;
-	first_unowned_reln = reln;
-}
-
-/*
- * remove_from_unowned_list -- unlink an SMgrRelation from the unowned list
- *
- * If the reln is not present in the list, nothing happens.  Typically this
- * would be caller error, but there seems no reason to throw an error.
- *
- * In the worst case this could be rather slow; but in all the cases that seem
- * likely to be performance-critical, the reln being sought will actually be
- * first in the list.  Furthermore, the number of unowned relns touched in any
- * one transaction shouldn't be all that high typically.  So it doesn't seem
- * worth expending the additional space and management logic needed for a
- * doubly-linked list.
- */
-static void
-remove_from_unowned_list(SMgrRelation reln)
-{
-	SMgrRelation *link;
-	SMgrRelation cur;
-
-	for (link = &first_unowned_reln, cur = *link;
-		 cur != NULL;
-		 link = &cur->next_unowned_reln, cur = *link)
-	{
-		if (cur == reln)
-		{
-			*link = cur->next_unowned_reln;
-			cur->next_unowned_reln = NULL;
-			break;
-		}
-	}
+	/* add to list of unowned relations */
+	dlist_push_tail(&unowned_relns, &reln->node);
 }
 
 /*
@@ -319,7 +264,7 @@ smgrclose(SMgrRelation reln)
 	owner = reln->smgr_owner;
 
 	if (!owner)
-		remove_from_unowned_list(reln);
+		dlist_delete(&reln->node);
 
 	if (hash_search(SMgrRelationHash,
 					(void *) &(reln->smgr_rnode),
@@ -383,33 +328,10 @@ smgrclosenode(RelFileNodeBackend rnode)
  *		Given an already-created (but presumably unused) SMgrRelation,
  *		cause the underlying disk file or other storage for the fork
  *		to be created.
- *
- *		If isRedo is true, it is okay for the underlying file to exist
- *		already because we are in a WAL replay sequence.
  */
 void
 smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
 {
-	/*
-	 * Exit quickly in WAL replay mode if we've already opened the file. If
-	 * it's open, it surely must exist.
-	 */
-	if (isRedo && reln->md_num_open_segs[forknum] > 0)
-		return;
-
-	/*
-	 * We may be using the target table space for the first time in this
-	 * database, so create a per-database subdirectory if needed.
-	 *
-	 * XXX this is a fairly ugly violation of module layering, but this seems
-	 * to be the best place to put the check.  Maybe TablespaceCreateDbspace
-	 * should be here and not in commands/tablespace.c?  But that would imply
-	 * importing a lot of stuff that smgr.c oughtn't know, either.
-	 */
-	TablespaceCreateDbspace(reln->smgr_rnode.node.spcNode,
-							reln->smgr_rnode.node.dbNode,
-							isRedo);
-
 	smgrsw[reln->smgr_which].smgr_create(reln, forknum, isRedo);
 }
 
@@ -751,52 +673,6 @@ smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
 }
 
-
-/*
- *	smgrpreckpt() -- Prepare for checkpoint.
- */
-void
-smgrpreckpt(void)
-{
-	int			i;
-
-	for (i = 0; i < NSmgr; i++)
-	{
-		if (smgrsw[i].smgr_pre_ckpt)
-			smgrsw[i].smgr_pre_ckpt();
-	}
-}
-
-/*
- *	smgrsync() -- Sync files to disk during checkpoint.
- */
-void
-smgrsync(void)
-{
-	int			i;
-
-	for (i = 0; i < NSmgr; i++)
-	{
-		if (smgrsw[i].smgr_sync)
-			smgrsw[i].smgr_sync();
-	}
-}
-
-/*
- *	smgrpostckpt() -- Post-checkpoint cleanup.
- */
-void
-smgrpostckpt(void)
-{
-	int			i;
-
-	for (i = 0; i < NSmgr; i++)
-	{
-		if (smgrsw[i].smgr_post_ckpt)
-			smgrsw[i].smgr_post_ckpt();
-	}
-}
-
 /*
  * AtEOXact_SMgr
  *
@@ -812,13 +688,19 @@ smgrpostckpt(void)
 void
 AtEOXact_SMgr(void)
 {
+	dlist_mutable_iter iter;
+
 	/*
 	 * Zap all unowned SMgrRelations.  We rely on smgrclose() to remove each
 	 * one from the list.
 	 */
-	while (first_unowned_reln != NULL)
+	dlist_foreach_modify(iter, &unowned_relns)
 	{
-		Assert(first_unowned_reln->smgr_owner == NULL);
-		smgrclose(first_unowned_reln);
+		SMgrRelation rel = dlist_container(SMgrRelationData, node,
+										   iter.cur);
+
+		Assert(rel->smgr_owner == NULL);
+
+		smgrclose(rel);
 	}
 }

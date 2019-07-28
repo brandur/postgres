@@ -18,7 +18,6 @@
 #include "miscadmin.h"
 
 #include "access/genam.h"
-#include "access/hash.h"
 #include "access/htup_details.h"
 #include "access/table.h"
 #include "access/xact.h"
@@ -54,7 +53,7 @@
 static List *OpenTableList(List *tables);
 static void CloseTableList(List *rels);
 static void PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
-					 AlterPublicationStmt *stmt);
+								 AlterPublicationStmt *stmt);
 static void PublicationDropTables(Oid pubid, List *rels, bool missing_ok);
 
 static void
@@ -130,7 +129,7 @@ parse_publication_options(List *options,
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
-					 errmsg("unrecognized publication parameter: %s", defel->defname)));
+					 errmsg("unrecognized publication parameter: \"%s\"", defel->defname)));
 	}
 }
 
@@ -232,6 +231,14 @@ CreatePublication(CreatePublicationStmt *stmt)
 	table_close(rel, RowExclusiveLock);
 
 	InvokeObjectPostCreateHook(PublicationRelationId, puboid, 0);
+
+	if (wal_level != WAL_LEVEL_LOGICAL)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("wal_level is insufficient to publish logical changes"),
+				 errhint("Set wal_level to logical before creating subscriptions.")));
+	}
 
 	return myself;
 }

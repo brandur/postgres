@@ -200,10 +200,10 @@ static const unicodeStyleFormat unicode_style = {
 /* Local functions */
 static int	strlen_max_width(unsigned char *str, int *target_width, int encoding);
 static void IsPagerNeeded(const printTableContent *cont, int extra_lines, bool expanded,
-			  FILE **fout, bool *is_pager);
+						  FILE **fout, bool *is_pager);
 
 static void print_aligned_vertical(const printTableContent *cont,
-					   FILE *fout, bool is_pager);
+								   FILE *fout, bool is_pager);
 
 
 /* Count number of digits in integral part of number */
@@ -3250,7 +3250,7 @@ printTableCleanup(printTableContent *const content)
 		for (i = 0; i < content->nrows * content->ncolumns; i++)
 		{
 			if (content->cellmustfree[i])
-				free((char *) content->cells[i]);
+				free(unconstify(char *, content->cells[i]));
 		}
 		free(content->cellmustfree);
 		content->cellmustfree = NULL;

@@ -35,7 +35,7 @@
 
 static Oid	get_partition_parent_worker(Relation inhRel, Oid relid);
 static void get_partition_ancestors_worker(Relation inhRel, Oid relid,
-							   List **ancestors);
+										   List **ancestors);
 
 /*
  * get_partition_parent
@@ -146,6 +146,42 @@ get_partition_ancestors_worker(Relation inhRel, Oid relid, List **ancestors)
 }
 
 /*
+ * index_get_partition
+ *		Return the OID of index of the given partition that is a child
+ *		of the given index, or InvalidOid if there isn't one.
+ */
+Oid
+index_get_partition(Relation partition, Oid indexId)
+{
+	List	   *idxlist = RelationGetIndexList(partition);
+	ListCell   *l;
+
+	foreach(l, idxlist)
+	{
+		Oid			partIdx = lfirst_oid(l);
+		HeapTuple	tup;
+		Form_pg_class classForm;
+		bool		ispartition;
+
+		tup = SearchSysCache1(RELOID, ObjectIdGetDatum(partIdx));
+		if (!HeapTupleIsValid(tup))
+			elog(ERROR, "cache lookup failed for relation %u", partIdx);
+		classForm = (Form_pg_class) GETSTRUCT(tup);
+		ispartition = classForm->relispartition;
+		ReleaseSysCache(tup);
+		if (!ispartition)
+			continue;
+		if (get_partition_parent(lfirst_oid(l)) == indexId)
+		{
+			list_free(idxlist);
+			return partIdx;
+		}
+	}
+
+	return InvalidOid;
+}
+
+/*
  * map_partition_varattnos - maps varattno of any Vars in expr from the
  * attno's of 'from_rel' to the attno's of 'to_rel' partition, each of which
  * may be either a leaf partition or a partitioned table, but both of which
@@ -239,7 +275,7 @@ has_partition_attrs(Relation rel, Bitmapset *attnums, bool *used_in_expr)
 
 			/* Find all attributes referenced */
 			pull_varattnos(expr, 1, &expr_attrs);
-			partexprs_item = lnext(partexprs_item);
+			partexprs_item = lnext(partexprs, partexprs_item);
 
 			if (bms_overlap(attnums, expr_attrs))
 			{
@@ -251,22 +287,6 @@ has_partition_attrs(Relation rel, Bitmapset *attnums, bool *used_in_expr)
 	}
 
 	return false;
-}
-
-/*
- * get_default_oid_from_partdesc
- *
- * Given a partition descriptor, return the OID of the default partition, if
- * one exists; else, return InvalidOid.
- */
-Oid
-get_default_oid_from_partdesc(PartitionDesc partdesc)
-{
-	if (partdesc && partdesc->boundinfo &&
-		partition_bound_has_default(partdesc->boundinfo))
-		return partdesc->oids[partdesc->boundinfo->default_index];
-
-	return InvalidOid;
 }
 
 /*
@@ -299,7 +319,7 @@ get_default_partition_oid(Oid parentId)
 /*
  * update_default_partition_oid
  *
- * Update pg_partition_table.partdefid with a new default partition OID.
+ * Update pg_partitioned_table.partdefid with a new default partition OID.
  */
 void
 update_default_partition_oid(Oid parentId, Oid defaultPartId)

@@ -37,17 +37,19 @@ build_hash_table(RecursiveUnionState *rustate)
 	Assert(node->numCols > 0);
 	Assert(node->numGroups > 0);
 
-	rustate->hashtable = BuildTupleHashTable(&rustate->ps,
-											 desc,
-											 node->numCols,
-											 node->dupColIdx,
-											 rustate->eqfuncoids,
-											 rustate->hashfunctions,
-											 node->numGroups,
-											 0,
-											 rustate->tableContext,
-											 rustate->tempContext,
-											 false);
+	rustate->hashtable = BuildTupleHashTableExt(&rustate->ps,
+												desc,
+												node->numCols,
+												node->dupColIdx,
+												rustate->eqfuncoids,
+												rustate->hashfunctions,
+												node->dupCollations,
+												node->numGroups,
+												0,
+												rustate->ps.state->es_query_cxt,
+												rustate->tableContext,
+												rustate->tempContext,
+												false);
 }
 
 
@@ -158,7 +160,7 @@ ExecRecursiveUnion(PlanState *pstate)
 }
 
 /* ----------------------------------------------------------------
- *		ExecInitRecursiveUnionScan
+ *		ExecInitRecursiveUnion
  * ----------------------------------------------------------------
  */
 RecursiveUnionState *
@@ -261,7 +263,7 @@ ExecInitRecursiveUnion(RecursiveUnion *node, EState *estate, int eflags)
 }
 
 /* ----------------------------------------------------------------
- *		ExecEndRecursiveUnionScan
+ *		ExecEndRecursiveUnion
  *
  *		frees any storage allocated through C routines.
  * ----------------------------------------------------------------
@@ -317,9 +319,9 @@ ExecReScanRecursiveUnion(RecursiveUnionState *node)
 	if (node->tableContext)
 		MemoryContextResetAndDeleteChildren(node->tableContext);
 
-	/* And rebuild empty hashtable if needed */
+	/* Empty hashtable if needed */
 	if (plan->numCols > 0)
-		build_hash_table(node);
+		ResetTupleHashTable(node->hashtable);
 
 	/* reset processing state */
 	node->recursing = false;

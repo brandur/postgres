@@ -18,8 +18,11 @@
 #include <unistd.h>
 
 #include "common.h"
+#include "common/logging.h"
 #include "fe_utils/connect.h"
 #include "fe_utils/string_utils.h"
+
+#define ERRCODE_UNDEFINED_TABLE  "42P01"
 
 
 static PGcancel *volatile cancelConn = NULL;
@@ -113,8 +116,8 @@ connectDatabase(const char *dbname, const char *pghost,
 
 		if (!conn)
 		{
-			fprintf(stderr, _("%s: could not connect to database %s: out of memory\n"),
-					progname, dbname);
+			pg_log_error("could not connect to database %s: out of memory",
+						 dbname);
 			exit(1);
 		}
 
@@ -140,14 +143,12 @@ connectDatabase(const char *dbname, const char *pghost,
 			PQfinish(conn);
 			return NULL;
 		}
-		fprintf(stderr, _("%s: could not connect to database %s: %s"),
-				progname, dbname, PQerrorMessage(conn));
+		pg_log_error("could not connect to database %s: %s",
+					 dbname, PQerrorMessage(conn));
 		exit(1);
 	}
 
-	if (PQserverVersion(conn) >= 70300)
-		PQclear(executeQuery(conn, ALWAYS_SECURE_SEARCH_PATH_SQL,
-							 progname, echo));
+	PQclear(executeQuery(conn, ALWAYS_SECURE_SEARCH_PATH_SQL, echo));
 
 	return conn;
 }
@@ -179,10 +180,34 @@ connectMaintenanceDatabase(const char *maintenance_db,
 }
 
 /*
+ * Disconnect the given connection, canceling any statement if one is active.
+ */
+void
+disconnectDatabase(PGconn *conn)
+{
+	char		errbuf[256];
+
+	Assert(conn != NULL);
+
+	if (PQtransactionStatus(conn) == PQTRANS_ACTIVE)
+	{
+		PGcancel   *cancel;
+
+		if ((cancel = PQgetCancel(conn)))
+		{
+			(void) PQcancel(cancel, errbuf, sizeof(errbuf));
+			PQfreeCancel(cancel);
+		}
+	}
+
+	PQfinish(conn);
+}
+
+/*
  * Run a query, return the results, exit program on failure.
  */
 PGresult *
-executeQuery(PGconn *conn, const char *query, const char *progname, bool echo)
+executeQuery(PGconn *conn, const char *query, bool echo)
 {
 	PGresult   *res;
 
@@ -193,10 +218,8 @@ executeQuery(PGconn *conn, const char *query, const char *progname, bool echo)
 	if (!res ||
 		PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
-		fprintf(stderr, _("%s: query failed: %s"),
-				progname, PQerrorMessage(conn));
-		fprintf(stderr, _("%s: query was: %s\n"),
-				progname, query);
+		pg_log_error("query failed: %s", PQerrorMessage(conn));
+		pg_log_info("query was: %s", query);
 		PQfinish(conn);
 		exit(1);
 	}
@@ -209,8 +232,7 @@ executeQuery(PGconn *conn, const char *query, const char *progname, bool echo)
  * As above for a SQL command (which returns nothing).
  */
 void
-executeCommand(PGconn *conn, const char *query,
-			   const char *progname, bool echo)
+executeCommand(PGconn *conn, const char *query, bool echo)
 {
 	PGresult   *res;
 
@@ -221,10 +243,8 @@ executeCommand(PGconn *conn, const char *query,
 	if (!res ||
 		PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
-		fprintf(stderr, _("%s: query failed: %s"),
-				progname, PQerrorMessage(conn));
-		fprintf(stderr, _("%s: query was: %s\n"),
-				progname, query);
+		pg_log_error("query failed: %s", PQerrorMessage(conn));
+		pg_log_info("query was: %s", query);
 		PQfinish(conn);
 		exit(1);
 	}
@@ -257,6 +277,57 @@ executeMaintenanceCommand(PGconn *conn, const char *query, bool echo)
 		PQclear(res);
 
 	return r;
+}
+
+/*
+ * Consume all the results generated for the given connection until
+ * nothing remains.  If at least one error is encountered, return false.
+ * Note that this will block if the connection is busy.
+ */
+bool
+consumeQueryResult(PGconn *conn)
+{
+	bool		ok = true;
+	PGresult   *result;
+
+	SetCancelConn(conn);
+	while ((result = PQgetResult(conn)) != NULL)
+	{
+		if (!processQueryResult(conn, result))
+			ok = false;
+	}
+	ResetCancelConn();
+	return ok;
+}
+
+/*
+ * Process (and delete) a query result.  Returns true if there's no error,
+ * false otherwise -- but errors about trying to work on a missing relation
+ * are reported and subsequently ignored.
+ */
+bool
+processQueryResult(PGconn *conn, PGresult *result)
+{
+	/*
+	 * If it's an error, report it.  Errors about a missing table are harmless
+	 * so we continue processing; but die for other errors.
+	 */
+	if (PQresultStatus(result) != PGRES_COMMAND_OK)
+	{
+		char	   *sqlState = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+
+		pg_log_error("processing of database \"%s\" failed: %s",
+					 PQdb(conn), PQerrorMessage(conn));
+
+		if (sqlState && strcmp(sqlState, ERRCODE_UNDEFINED_TABLE) != 0)
+		{
+			PQclear(result);
+			return false;
+		}
+	}
+
+	PQclear(result);
+	return true;
 }
 
 
@@ -303,20 +374,13 @@ splitTableColumnsSpec(const char *spec, int encoding,
  */
 void
 appendQualifiedRelation(PQExpBuffer buf, const char *spec,
-						PGconn *conn, const char *progname, bool echo)
+						PGconn *conn, bool echo)
 {
 	char	   *table;
 	const char *columns;
 	PQExpBufferData sql;
 	PGresult   *res;
 	int			ntups;
-
-	/* Before 7.3, the concept of qualifying a name did not exist. */
-	if (PQserverVersion(conn) < 70300)
-	{
-		appendPQExpBufferStr(&sql, spec);
-		return;
-	}
 
 	splitTableColumnsSpec(spec, PQclientEncoding(conn), &table, &columns);
 
@@ -335,7 +399,7 @@ appendQualifiedRelation(PQExpBuffer buf, const char *spec,
 	appendStringLiteralConn(&sql, table, conn);
 	appendPQExpBufferStr(&sql, "::pg_catalog.regclass;");
 
-	executeCommand(conn, "RESET search_path;", progname, echo);
+	executeCommand(conn, "RESET search_path;", echo);
 
 	/*
 	 * One row is a typical result, as is a nonexistent relation ERROR.
@@ -343,15 +407,14 @@ appendQualifiedRelation(PQExpBuffer buf, const char *spec,
 	 * relation has that OID; this query returns no rows.  Catalog corruption
 	 * might elicit other row counts.
 	 */
-	res = executeQuery(conn, sql.data, progname, echo);
+	res = executeQuery(conn, sql.data, echo);
 	ntups = PQntuples(res);
 	if (ntups != 1)
 	{
-		fprintf(stderr,
-				ngettext("%s: query returned %d row instead of one: %s\n",
-						 "%s: query returned %d rows instead of one: %s\n",
-						 ntups),
-				progname, ntups, sql.data);
+		pg_log_error(ngettext("query returned %d row instead of one: %s",
+							  "query returned %d rows instead of one: %s",
+							  ntups),
+					 ntups, sql.data);
 		PQfinish(conn);
 		exit(1);
 	}
@@ -363,8 +426,7 @@ appendQualifiedRelation(PQExpBuffer buf, const char *spec,
 	termPQExpBuffer(&sql);
 	pg_free(table);
 
-	PQclear(executeQuery(conn, ALWAYS_SECURE_SEARCH_PATH_SQL,
-						 progname, echo));
+	PQclear(executeQuery(conn, ALWAYS_SECURE_SEARCH_PATH_SQL, echo));
 }
 
 

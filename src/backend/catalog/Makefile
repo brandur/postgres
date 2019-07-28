@@ -34,7 +34,7 @@ CATALOG_HEADERS := \
 	pg_attrdef.h pg_constraint.h pg_inherits.h pg_index.h pg_operator.h \
 	pg_opfamily.h pg_opclass.h pg_am.h pg_amop.h pg_amproc.h \
 	pg_language.h pg_largeobject_metadata.h pg_largeobject.h pg_aggregate.h \
-	pg_statistic_ext.h \
+	pg_statistic_ext.h pg_statistic_ext_data.h \
 	pg_statistic.h pg_rewrite.h pg_trigger.h pg_event_trigger.h pg_description.h \
 	pg_cast.h pg_enum.h pg_namespace.h pg_conversion.h pg_depend.h \
 	pg_database.h pg_db_role_setting.h pg_tablespace.h pg_pltemplate.h \
@@ -68,9 +68,6 @@ POSTGRES_BKI_DATA = $(addprefix $(top_srcdir)/src/include/catalog/,\
 	pg_ts_template.dat pg_type.dat \
 	)
 
-# location of Catalog.pm
-catalogdir = $(top_srcdir)/src/backend/catalog
-
 all: distprep generated-header-symlinks
 
 distprep: bki-stamp
@@ -88,9 +85,8 @@ generated-header-symlinks: $(top_builddir)/src/include/catalog/header-stamp
 # instead is cheating a bit, but it will achieve the goal of updating the
 # version number when it changes.
 bki-stamp: genbki.pl Catalog.pm $(POSTGRES_BKI_SRCS) $(POSTGRES_BKI_DATA) $(top_srcdir)/configure.in
-	$(PERL) -I $(catalogdir) $< \
-		-I $(top_srcdir)/src/include/ --set-version=$(MAJORVERSION) \
-		$(POSTGRES_BKI_SRCS)
+	$(PERL) $< --include-path=$(top_srcdir)/src/include/ \
+		--set-version=$(MAJORVERSION) $(POSTGRES_BKI_SRCS)
 	touch $@
 
 # The generated headers must all be symlinked into builddir/src/include/,

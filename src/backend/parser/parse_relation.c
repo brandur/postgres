@@ -41,22 +41,22 @@
 #define MAX_FUZZY_DISTANCE				3
 
 static RangeTblEntry *scanNameSpaceForRefname(ParseState *pstate,
-						const char *refname, int location);
+											  const char *refname, int location);
 static RangeTblEntry *scanNameSpaceForRelid(ParseState *pstate, Oid relid,
-					  int location);
+											int location);
 static void check_lateral_ref_ok(ParseState *pstate, ParseNamespaceItem *nsitem,
-					 int location);
+								 int location);
 static void markRTEForSelectPriv(ParseState *pstate, RangeTblEntry *rte,
-					 int rtindex, AttrNumber col);
+								 int rtindex, AttrNumber col);
 static void expandRelation(Oid relid, Alias *eref,
-			   int rtindex, int sublevels_up,
-			   int location, bool include_dropped,
-			   List **colnames, List **colvars);
+						   int rtindex, int sublevels_up,
+						   int location, bool include_dropped,
+						   List **colnames, List **colvars);
 static void expandTupleDesc(TupleDesc tupdesc, Alias *eref,
-				int count, int offset,
-				int rtindex, int sublevels_up,
-				int location, bool include_dropped,
-				List **colnames, List **colvars);
+							int count, int offset,
+							int rtindex, int sublevels_up,
+							int location, bool include_dropped,
+							List **colnames, List **colvars);
 static int	specialAttNum(const char *attname);
 static bool isQueryUsingTempRelation_walker(Node *node, void *context);
 
@@ -731,6 +731,17 @@ scanRTEForColumn(ParseState *pstate, RangeTblEntry *rte, const char *colname,
 							colname),
 					 parser_errposition(pstate, location)));
 
+		/*
+		 * In generated column, no system column is allowed except tableOid.
+		 */
+		if (pstate->p_expr_kind == EXPR_KIND_GENERATED_COLUMN &&
+			attnum < InvalidAttrNumber && attnum != TableOidAttributeNumber)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
+					 errmsg("cannot use system column \"%s\" in column generation expression",
+							colname),
+					 parser_errposition(pstate, location)));
+
 		if (attnum != InvalidAttrNumber)
 		{
 			/* now check to see if column actually is defined */
@@ -1033,6 +1044,7 @@ static void
 buildRelationAliases(TupleDesc tupdesc, Alias *alias, Alias *eref)
 {
 	int			maxattrs = tupdesc->natts;
+	List	   *aliaslist;
 	ListCell   *aliaslc;
 	int			numaliases;
 	int			varattno;
@@ -1042,13 +1054,15 @@ buildRelationAliases(TupleDesc tupdesc, Alias *alias, Alias *eref)
 
 	if (alias)
 	{
-		aliaslc = list_head(alias->colnames);
-		numaliases = list_length(alias->colnames);
+		aliaslist = alias->colnames;
+		aliaslc = list_head(aliaslist);
+		numaliases = list_length(aliaslist);
 		/* We'll rebuild the alias colname list */
 		alias->colnames = NIL;
 	}
 	else
 	{
+		aliaslist = NIL;
 		aliaslc = NULL;
 		numaliases = 0;
 	}
@@ -1070,7 +1084,7 @@ buildRelationAliases(TupleDesc tupdesc, Alias *alias, Alias *eref)
 		{
 			/* Use the next user-supplied alias */
 			attrname = (Value *) lfirst(aliaslc);
-			aliaslc = lnext(aliaslc);
+			aliaslc = lnext(aliaslist, aliaslc);
 			alias->colnames = lappend(alias->colnames, attrname);
 		}
 		else
@@ -1257,6 +1271,7 @@ addRangeTableEntry(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, but not to join list
@@ -1328,6 +1343,7 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, but not to join list
@@ -1407,6 +1423,7 @@ addRangeTableEntryForSubquery(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, but not to join list
@@ -1670,6 +1687,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, but not to join list
@@ -1733,6 +1751,7 @@ addRangeTableEntryForTableFunc(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, but not to join list
@@ -1811,6 +1830,7 @@ addRangeTableEntryForValues(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, but not to join list
@@ -1881,6 +1901,7 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, but not to join list
@@ -1983,6 +2004,7 @@ addRangeTableEntryForCTE(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, but not to join list
@@ -2268,7 +2290,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 						*colvars = lappend(*colvars, varnode);
 					}
 
-					aliasp_item = lnext(aliasp_item);
+					aliasp_item = lnext(rte->eref->colnames, aliasp_item);
 				}
 			}
 			break;
@@ -2495,7 +2517,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 							*colnames = lappend(*colnames,
 												makeString(pstrdup("")));
 
-						aliasp_item = lnext(aliasp_item);
+						aliasp_item = lnext(rte->eref->colnames, aliasp_item);
 					}
 
 					if (colvars)
@@ -2567,19 +2589,11 @@ expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 				int location, bool include_dropped,
 				List **colnames, List **colvars)
 {
-	ListCell   *aliascell = list_head(eref->colnames);
+	ListCell   *aliascell;
 	int			varattno;
 
-	if (colnames)
-	{
-		int			i;
-
-		for (i = 0; i < offset; i++)
-		{
-			if (aliascell)
-				aliascell = lnext(aliascell);
-		}
-	}
+	aliascell = (offset < list_length(eref->colnames)) ?
+		list_nth_cell(eref->colnames, offset) : NULL;
 
 	Assert(count <= tupdesc->natts);
 	for (varattno = 0; varattno < count; varattno++)
@@ -2603,7 +2617,7 @@ expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 				}
 			}
 			if (aliascell)
-				aliascell = lnext(aliascell);
+				aliascell = lnext(eref->colnames, aliascell);
 			continue;
 		}
 
@@ -2614,7 +2628,7 @@ expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 			if (aliascell)
 			{
 				label = strVal(lfirst(aliascell));
-				aliascell = lnext(aliascell);
+				aliascell = lnext(eref->colnames, aliascell);
 			}
 			else
 			{

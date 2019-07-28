@@ -53,8 +53,8 @@ CATALOG(pg_proc,1255,ProcedureRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(81,Proce
 	/* element type of variadic array, or 0 */
 	Oid			provariadic BKI_DEFAULT(0) BKI_LOOKUP(pg_type);
 
-	/* transforms calls to it during planning */
-	regproc		protransform BKI_DEFAULT(0) BKI_LOOKUP(pg_proc);
+	/* planner support function for this function, or 0 if none */
+	regproc		prosupport BKI_DEFAULT(0) BKI_LOOKUP(pg_proc);
 
 	/* see PROKIND_ categories below */
 	char		prokind BKI_DEFAULT(f);
@@ -179,30 +179,31 @@ typedef FormData_pg_proc *Form_pg_proc;
 
 
 extern ObjectAddress ProcedureCreate(const char *procedureName,
-				Oid procNamespace,
-				bool replace,
-				bool returnsSet,
-				Oid returnType,
-				Oid proowner,
-				Oid languageObjectId,
-				Oid languageValidator,
-				const char *prosrc,
-				const char *probin,
-				char prokind,
-				bool security_definer,
-				bool isLeakProof,
-				bool isStrict,
-				char volatility,
-				char parallel,
-				oidvector *parameterTypes,
-				Datum allParameterTypes,
-				Datum parameterModes,
-				Datum parameterNames,
-				List *parameterDefaults,
-				Datum trftypes,
-				Datum proconfig,
-				float4 procost,
-				float4 prorows);
+									 Oid procNamespace,
+									 bool replace,
+									 bool returnsSet,
+									 Oid returnType,
+									 Oid proowner,
+									 Oid languageObjectId,
+									 Oid languageValidator,
+									 const char *prosrc,
+									 const char *probin,
+									 char prokind,
+									 bool security_definer,
+									 bool isLeakProof,
+									 bool isStrict,
+									 char volatility,
+									 char parallel,
+									 oidvector *parameterTypes,
+									 Datum allParameterTypes,
+									 Datum parameterModes,
+									 Datum parameterNames,
+									 List *parameterDefaults,
+									 Datum trftypes,
+									 Datum proconfig,
+									 Oid prosupport,
+									 float4 procost,
+									 float4 prorows);
 
 extern bool function_parse_error_transpose(const char *prosrc);
 

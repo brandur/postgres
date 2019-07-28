@@ -21,12 +21,12 @@
 
 
 static bool parseAclItem(const char *item, const char *type,
-			 const char *name, const char *subname, int remoteVersion,
-			 PQExpBuffer grantee, PQExpBuffer grantor,
-			 PQExpBuffer privs, PQExpBuffer privswgo);
+						 const char *name, const char *subname, int remoteVersion,
+						 PQExpBuffer grantee, PQExpBuffer grantor,
+						 PQExpBuffer privs, PQExpBuffer privswgo);
 static char *copyAclUserName(PQExpBuffer output, char *input);
 static void AddAcl(PQExpBuffer aclbuf, const char *keyword,
-	   const char *subname);
+				   const char *subname);
 
 
 /*
@@ -425,7 +425,7 @@ buildDefaultACLCommands(const char *type, const char *nspname,
 
 	if (strlen(initacls) != 0 || strlen(initracls) != 0)
 	{
-		appendPQExpBuffer(sql, "SELECT pg_catalog.binary_upgrade_set_record_init_privs(true);\n");
+		appendPQExpBufferStr(sql, "SELECT pg_catalog.binary_upgrade_set_record_init_privs(true);\n");
 		if (!buildACLCommands("", NULL, NULL, type,
 							  initacls, initracls, owner,
 							  prefix->data, remoteVersion, sql))
@@ -433,7 +433,7 @@ buildDefaultACLCommands(const char *type, const char *nspname,
 			destroyPQExpBuffer(prefix);
 			return false;
 		}
-		appendPQExpBuffer(sql, "SELECT pg_catalog.binary_upgrade_set_record_init_privs(false);\n");
+		appendPQExpBufferStr(sql, "SELECT pg_catalog.binary_upgrade_set_record_init_privs(false);\n");
 	}
 
 	if (!buildACLCommands("", NULL, NULL, type,
@@ -481,15 +481,13 @@ parseAclItem(const char *item, const char *type,
 	char	   *slpos;
 	char	   *pos;
 
-	buf = strdup(item);
-	if (!buf)
-		return false;
+	buf = pg_strdup(item);
 
 	/* user or group name is string up to = */
 	eqpos = copyAclUserName(grantee, buf);
 	if (*eqpos != '=')
 	{
-		free(buf);
+		pg_free(buf);
 		return false;
 	}
 
@@ -501,13 +499,13 @@ parseAclItem(const char *item, const char *type,
 		slpos = copyAclUserName(grantor, slpos);
 		if (*slpos != '\0')
 		{
-			free(buf);
+			pg_free(buf);
 			return false;
 		}
 	}
 	else
 	{
-		free(buf);
+		pg_free(buf);
 		return false;
 	}
 
@@ -617,7 +615,7 @@ do { \
 			appendPQExpBuffer(privs, "(%s)", subname);
 	}
 
-	free(buf);
+	pg_free(buf);
 
 	return true;
 }

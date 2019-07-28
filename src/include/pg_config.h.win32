@@ -139,6 +139,9 @@
    don't. */
 #define HAVE_DECL_STRNLEN 1
 
+/* Define to 1 if you have the `strtof' function. */
+#define HAVE_STRTOF 1
+
 /* Define to 1 if you have the declaration of `strtoll', and to 0 if you
    don't. */
 #define HAVE_DECL_STRTOLL 1
@@ -156,14 +159,8 @@
 /* Define to 1 if you have the <editline/readline.h> header file. */
 /* #undef HAVE_EDITLINE_READLINE_H */
 
-/* Define to 1 if you have the `fcvt' function. */
-#define HAVE_FCVT 1
-
 /* Define to 1 if you have the `fdatasync' function. */
 /* #undef HAVE_FDATASYNC */
-
-/* Define to 1 if you have finite(). */
-#define HAVE_FINITE 1
 
 /* Define to 1 if you have the `fpclass' function. */
 /* #undef HAVE_FPCLASS */
@@ -466,9 +463,6 @@
 /* Define to 1 if `__ss_len' is member of `struct sockaddr_storage'. */
 /* #undef HAVE_STRUCT_SOCKADDR_STORAGE___SS_LEN */
 
-/* Define to 1 if the system has the type `struct sockaddr_un'. */
-/* #undef HAVE_STRUCT_SOCKADDR_UN */
-
 /* Define to 1 if `tm_zone' is member of `struct tm'. */
 /* #undef HAVE_STRUCT_TM_TM_ZONE */
 
@@ -477,9 +471,6 @@
 
 /* Define to 1 if you have the `sync_file_range' function. */
 /* #undef HAVE_SYNC_FILE_RANGE */
-
-/* Define to 1 if you have the `sysconf' function. */
-/* #undef HAVE_SYSCONF */
 
 /* Define to 1 if you have the syslog interface. */
 /* #undef HAVE_SYSLOG */
@@ -572,6 +563,9 @@
 /* Define to 1 if you have the `X509_get_signature_nid' function. */
 #define HAVE_X509_GET_SIGNATURE_NID 1
 
+/* Define to 1 if the assembler supports X86_64's POPCNTQ instruction. */
+/* #undef HAVE_X86_64_POPCNTQ */
+
 /* Define to 1 if the system has the type `_Bool'. */
 /* #undef HAVE__BOOL */
 
@@ -584,11 +578,20 @@
 /* Define to 1 if your compiler understands __builtin_bswap64. */
 /* #undef HAVE__BUILTIN_BSWAP64 */
 
+/* Define to 1 if your compiler understands __builtin_clz. */
+/* #undef HAVE__BUILTIN_CLZ */
+
 /* Define to 1 if your compiler understands __builtin_constant_p. */
 /* #undef HAVE__BUILTIN_CONSTANT_P */
 
+/* Define to 1 if your compiler understands __builtin_ctz. */
+/* #undef HAVE__BUILTIN_CTZ */
+
 /* Define to 1 if your compiler understands __builtin_$op_overflow. */
 /* #undef HAVE__BUILTIN_OP_OVERFLOW */
+
+/* Define to 1 if your compiler understands __builtin_popcount. */
+/* #undef HAVE__BUILTIN_POPCOUNT */
 
 /* Define to 1 if your compiler understands __builtin_types_compatible_p. */
 /* #undef HAVE__BUILTIN_TYPES_COMPATIBLE_P */
@@ -630,10 +633,10 @@
 #define PACKAGE_NAME "PostgreSQL"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "PostgreSQL 12devel"
+#define PACKAGE_STRING "PostgreSQL 13devel"
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "12devel"
+#define PACKAGE_VERSION "13devel"
 
 /* Define to the name of a signed 128-bit integer type. */
 #undef PG_INT128_TYPE
@@ -642,10 +645,10 @@
 #define PG_INT64_TYPE long long int
 
 /* PostgreSQL version as a string */
-#define PG_VERSION "12devel"
+#define PG_VERSION "13devel"
 
 /* PostgreSQL version as a number */
-#define PG_VERSION_NUM 120000
+#define PG_VERSION_NUM 130000
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "postgresql"

@@ -98,6 +98,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
   NULL |
   CHECK ( <replaceable class="parameter">expression</replaceable> ) [ NO INHERIT ] |
   DEFAULT <replaceable>default_expr</replaceable> |
+  GENERATED ALWAYS AS ( <replaceable>generation_expr</replaceable> ) STORED |
   GENERATED { ALWAYS | BY DEFAULT } AS IDENTITY [ ( <replaceable>sequence_options</replaceable> ) ] |
   UNIQUE <replaceable class="parameter">index_parameters</replaceable> |
   PRIMARY KEY <replaceable class="parameter">index_parameters</replaceable> |
@@ -214,8 +215,17 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     <listitem>
      <para>
       These forms change whether a column is marked to allow null
-      values or to reject null values.  You can only use <literal>SET
-      NOT NULL</literal> when the column contains no null values.
+      values or to reject null values.
+     </para>
+
+     <para>
+      <literal>SET NOT NULL</literal> may only be applied to a column
+      providing none of the records in the table contain a
+      <literal>NULL</literal> value for the column.  Ordinarily this is
+      checked during the <literal>ALTER TABLE</literal> by scanning the
+      entire table; however, if a valid <literal>CHECK</literal> constraint is
+      found which proves no <literal>NULL</literal> can exist, then the
+      table scan is skipped.
      </para>
 
      <para>
@@ -630,6 +640,13 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       moves the data file(s) associated with the table to the new tablespace.
       Indexes on the table, if any, are not moved; but they can be moved
       separately with additional <literal>SET TABLESPACE</literal> commands.
+      When applied to a partitioned table, nothing is moved, but any
+      partitions created afterwards with
+      <command>CREATE TABLE PARTITION OF</command> will use that tablespace,
+      unless the <literal>TABLESPACE</literal> clause is used to override it.
+     </para>
+
+     <para>
       All tables in the current database in a tablespace can be moved by using
       the <literal>ALL IN TABLESPACE</literal> form, which will lock all tables
       to be moved first and then move each one.  This form also supports
@@ -637,7 +654,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       roles specified.  If the <literal>NOWAIT</literal> option is specified
       then the command will fail if it is unable to acquire all of the locks
       required immediately.  Note that system catalogs are not moved by this
-      command, use <command>ALTER DATABASE</command> or explicit
+      command; use <command>ALTER DATABASE</command> or explicit
       <command>ALTER TABLE</command> invocations instead if desired.  The
       <literal>information_schema</literal> relations are not considered part
       of the system catalogs and will be moved.
@@ -826,6 +843,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       one will be created in the attached table; or, if an equivalent
       index already exists, will be attached to the target table's index,
       as if <command>ALTER INDEX ATTACH PARTITION</command> had been executed.
+      Note that if the existing table is a foreign table, it is currently not
+      allowed to attach the table as a partition of the target table if there
+      are <literal>UNIQUE</literal> indexes on the target table.  (See also
+      <xref linkend="sql-createforeigntable"/>.)
      </para>
 
      <para>

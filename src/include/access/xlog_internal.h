@@ -31,7 +31,7 @@
 /*
  * Each page of XLOG file has a header like this:
  */
-#define XLOG_PAGE_MAGIC 0xD098	/* can be used as WAL version indicator */
+#define XLOG_PAGE_MAGIC 0xD101	/* can be used as WAL version indicator */
 
 typedef struct XLogPageHeaderData
 {
@@ -226,6 +226,7 @@ typedef struct xl_parameter_change
 {
 	int			MaxConnections;
 	int			max_worker_processes;
+	int			max_wal_senders;
 	int			max_prepared_xacts;
 	int			max_locks_per_xact;
 	int			wal_level;
@@ -267,7 +268,7 @@ typedef enum
 	RECOVERY_TARGET_ACTION_PAUSE,
 	RECOVERY_TARGET_ACTION_PROMOTE,
 	RECOVERY_TARGET_ACTION_SHUTDOWN
-} RecoveryTargetAction;
+}			RecoveryTargetAction;
 
 /*
  * Method table for resource managers.
@@ -319,10 +320,10 @@ extern char *recoveryRestoreCommand;
  * Prototypes for functions in xlogarchive.c
  */
 extern bool RestoreArchivedFile(char *path, const char *xlogfname,
-					const char *recovername, off_t expectedSize,
-					bool cleanupEnabled);
+								const char *recovername, off_t expectedSize,
+								bool cleanupEnabled);
 extern void ExecuteRecoveryCommand(const char *command, const char *commandName,
-					   bool failOnerror);
+								   bool failOnSignal);
 extern void KeepFileRestoredFromArchive(const char *path, const char *xlogfname);
 extern void XLogArchiveNotify(const char *xlog);
 extern void XLogArchiveNotifySeg(XLogSegNo segno);

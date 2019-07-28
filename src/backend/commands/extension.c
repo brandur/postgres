@@ -104,27 +104,27 @@ typedef struct ExtensionVersionInfo
 
 /* Local functions */
 static List *find_update_path(List *evi_list,
-				 ExtensionVersionInfo *evi_start,
-				 ExtensionVersionInfo *evi_target,
-				 bool reject_indirect,
-				 bool reinitialize);
-static Oid get_required_extension(char *reqExtensionName,
-					   char *extensionName,
-					   char *origSchemaName,
-					   bool cascade,
-					   List *parents,
-					   bool is_create);
+							  ExtensionVersionInfo *evi_start,
+							  ExtensionVersionInfo *evi_target,
+							  bool reject_indirect,
+							  bool reinitialize);
+static Oid	get_required_extension(char *reqExtensionName,
+								   char *extensionName,
+								   char *origSchemaName,
+								   bool cascade,
+								   List *parents,
+								   bool is_create);
 static void get_available_versions_for_extension(ExtensionControlFile *pcontrol,
-									 Tuplestorestate *tupstore,
-									 TupleDesc tupdesc);
+												 Tuplestorestate *tupstore,
+												 TupleDesc tupdesc);
 static Datum convert_requires_to_datum(List *requires);
 static void ApplyExtensionUpdates(Oid extensionOid,
-					  ExtensionControlFile *pcontrol,
-					  const char *initialVersion,
-					  List *updateVersions,
-					  char *origSchemaName,
-					  bool cascade,
-					  bool is_create);
+								  ExtensionControlFile *pcontrol,
+								  const char *initialVersion,
+								  List *updateVersions,
+								  char *origSchemaName,
+								  bool cascade,
+								  bool is_create);
 static char *read_whole_file(const char *filename, int *length);
 
 
@@ -717,8 +717,20 @@ execute_sql_string(const char *sql)
 	foreach(lc1, raw_parsetree_list)
 	{
 		RawStmt    *parsetree = lfirst_node(RawStmt, lc1);
+		MemoryContext per_parsetree_context,
+					oldcontext;
 		List	   *stmt_list;
 		ListCell   *lc2;
+
+		/*
+		 * We do the work for each parsetree in a short-lived context, to
+		 * limit the memory used when there are many commands in the string.
+		 */
+		per_parsetree_context =
+			AllocSetContextCreate(CurrentMemoryContext,
+								  "execute_sql_string per-statement context",
+								  ALLOCSET_DEFAULT_SIZES);
+		oldcontext = MemoryContextSwitchTo(per_parsetree_context);
 
 		/* Be sure parser can see any DDL done so far */
 		CommandCounterIncrement();
@@ -772,6 +784,10 @@ execute_sql_string(const char *sql)
 
 			PopActiveSnapshot();
 		}
+
+		/* Clean up per-parsetree context. */
+		MemoryContextSwitchTo(oldcontext);
+		MemoryContextDelete(per_parsetree_context);
 	}
 
 	/* Be sure to advance the command counter after the last script command */
@@ -901,10 +917,11 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 		{
 			const char *qSchemaName = quote_identifier(schemaName);
 
-			t_sql = DirectFunctionCall3(replace_text,
-										t_sql,
-										CStringGetTextDatum("@extschema@"),
-										CStringGetTextDatum(qSchemaName));
+			t_sql = DirectFunctionCall3Coll(replace_text,
+											C_COLLATION_OID,
+											t_sql,
+											CStringGetTextDatum("@extschema@"),
+											CStringGetTextDatum(qSchemaName));
 		}
 
 		/*
@@ -913,10 +930,11 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 		 */
 		if (control->module_pathname)
 		{
-			t_sql = DirectFunctionCall3(replace_text,
-										t_sql,
-										CStringGetTextDatum("MODULE_PATHNAME"),
-										CStringGetTextDatum(control->module_pathname));
+			t_sql = DirectFunctionCall3Coll(replace_text,
+											C_COLLATION_OID,
+											t_sql,
+											CStringGetTextDatum("MODULE_PATHNAME"),
+											CStringGetTextDatum(control->module_pathname));
 		}
 
 		/* And now back to C string */

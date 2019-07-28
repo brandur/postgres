@@ -52,9 +52,6 @@
  * (v) make sure the lock level is set correctly for that operation
  * (vi) don't forget to document the option
  *
- * Note that we don't handle "oids" in relOpts because it is handled by
- * interpretOidsOption().
- *
  * The default choice for any new option should be AccessExclusiveLock.
  * In some cases the lock level can be reduced from there, but the lock
  * level chosen should always conflict with itself to ensure that multiple
@@ -72,12 +69,12 @@
  * currently executing.
  *
  * Fillfactor can be set because it applies only to subsequent changes made to
- * data blocks, as documented in heapio.c
+ * data blocks, as documented in hio.c
  *
  * n_distinct options can be set at ShareUpdateExclusiveLock because they
  * are only used during ANALYZE, which uses a ShareUpdateExclusiveLock,
  * so the ANALYZE will not be affected by in-flight changes. Changing those
- * values has no affect until the next ANALYZE, so no need for stronger lock.
+ * values has no effect until the next ANALYZE, so no need for stronger lock.
  *
  * Planner-related parameters can be set with ShareUpdateExclusiveLock because
  * they only affect planning and not the correctness of the execution. Plans
@@ -89,6 +86,11 @@
  * Setting parallel_workers is safe, since it acts the same as
  * max_parallel_workers_per_gather which is a USERSET parameter that doesn't
  * affect existing plans or queries.
+ *
+ * vacuum_truncate can be set at ShareUpdateExclusiveLock because it
+ * is only used during VACUUM, which uses a ShareUpdateExclusiveLock,
+ * so the VACUUM will not be affected by in-flight changes. Changing its
+ * value has no effect until the next VACUUM, so no need for stronger lock.
  */
 
 static relopt_bool boolRelOpts[] =
@@ -137,6 +139,24 @@ static relopt_bool boolRelOpts[] =
 			AccessExclusiveLock
 		},
 		false
+	},
+	{
+		{
+			"vacuum_index_cleanup",
+			"Enables index vacuuming and index cleanup",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		true
+	},
+	{
+		{
+			"vacuum_truncate",
+			"Enables vacuum to truncate empty pages at the end of this table",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		true
 	},
 	/* list terminator */
 	{{NULL}}
@@ -211,15 +231,6 @@ static relopt_int intRelOpts[] =
 			ShareUpdateExclusiveLock
 		},
 		-1, 0, INT_MAX
-	},
-	{
-		{
-			"autovacuum_vacuum_cost_delay",
-			"Vacuum cost delay in milliseconds, for autovacuum",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		},
-		-1, 0, 100
 	},
 	{
 		{
@@ -348,6 +359,15 @@ static relopt_real realRelOpts[] =
 {
 	{
 		{
+			"autovacuum_vacuum_cost_delay",
+			"Vacuum cost delay in milliseconds, for autovacuum",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		-1, 0.0, 100.0
+	},
+	{
+		{
 			"autovacuum_vacuum_scale_factor",
 			"Number of tuple updates or deletes prior to vacuum as a fraction of reltuples",
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
@@ -452,7 +472,7 @@ static bool need_initialization = true;
 
 static void initialize_reloptions(void);
 static void parse_one_reloption(relopt_value *option, char *text_str,
-					int text_len, bool validate);
+								int text_len, bool validate);
 
 /*
  * initialize_reloptions
@@ -1198,7 +1218,7 @@ parse_one_reloption(relopt_value *option, char *text_str, int text_len,
 			{
 				relopt_real *optreal = (relopt_real *) option->gen;
 
-				parsed = parse_real(value, &option->values.real_val);
+				parsed = parse_real(value, &option->values.real_val, 0, NULL);
 				if (validate && !parsed)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1359,8 +1379,6 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_threshold)},
 		{"autovacuum_analyze_threshold", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, analyze_threshold)},
-		{"autovacuum_vacuum_cost_delay", RELOPT_TYPE_INT,
-		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_cost_delay)},
 		{"autovacuum_vacuum_cost_limit", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_cost_limit)},
 		{"autovacuum_freeze_min_age", RELOPT_TYPE_INT,
@@ -1379,6 +1397,8 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_min_duration)},
 		{"toast_tuple_target", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, toast_tuple_target)},
+		{"autovacuum_vacuum_cost_delay", RELOPT_TYPE_REAL,
+		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_cost_delay)},
 		{"autovacuum_vacuum_scale_factor", RELOPT_TYPE_REAL,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_scale_factor)},
 		{"autovacuum_analyze_scale_factor", RELOPT_TYPE_REAL,
@@ -1388,7 +1408,11 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"parallel_workers", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, parallel_workers)},
 		{"vacuum_cleanup_index_scale_factor", RELOPT_TYPE_REAL,
-		offsetof(StdRdOptions, vacuum_cleanup_index_scale_factor)}
+		offsetof(StdRdOptions, vacuum_cleanup_index_scale_factor)},
+		{"vacuum_index_cleanup", RELOPT_TYPE_BOOL,
+		offsetof(StdRdOptions, vacuum_index_cleanup)},
+		{"vacuum_truncate", RELOPT_TYPE_BOOL,
+		offsetof(StdRdOptions, vacuum_truncate)}
 	};
 
 	options = parseRelOptions(reloptions, validate, kind, &numoptions);

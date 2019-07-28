@@ -742,6 +742,13 @@ select * from json_to_record('{"ia2": [1, 2, 3]}') as x(ia2 int[][]);
 select * from json_to_record('{"ia2": [[1, 2], [3, 4]]}') as x(ia2 int4[][]);
 select * from json_to_record('{"ia2": [[[1], [2], [3]]]}') as x(ia2 int4[][]);
 
+select * from json_to_record('{"out": {"key": 1}}') as x(out json);
+select * from json_to_record('{"out": [{"key": 1}]}') as x(out json);
+select * from json_to_record('{"out": "{\"key\": 1}"}') as x(out json);
+select * from json_to_record('{"out": {"key": 1}}') as x(out jsonb);
+select * from json_to_record('{"out": [{"key": 1}]}') as x(out jsonb);
+select * from json_to_record('{"out": "{\"key\": 1}"}') as x(out jsonb);
+
 -- json_strip_nulls
 
 select json_strip_nulls(null);
@@ -788,7 +795,7 @@ select json_to_tsvector('english', '{"a": "aaa in bbb", "b": 123, "c": 456, "d":
 select json_to_tsvector('english', '{"a": "aaa in bbb", "b": 123, "c": 456, "d": true, "f": false, "g": null}'::json, '"boolean"');
 select json_to_tsvector('english', '{"a": "aaa in bbb", "b": 123, "c": 456, "d": true, "f": false, "g": null}'::json, '["string", "numeric"]');
 
--- ts_vector corner cases
+-- to_tsvector corner cases
 select to_tsvector('""'::json);
 select to_tsvector('{}'::json);
 select to_tsvector('[]'::json);

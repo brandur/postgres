@@ -53,12 +53,12 @@ static HTAB *CFuncHash = NULL;
 
 
 static void fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
-					   bool ignore_security);
+								   bool ignore_security);
 static void fmgr_info_C_lang(Oid functionId, FmgrInfo *finfo, HeapTuple procedureTuple);
 static void fmgr_info_other_lang(Oid functionId, FmgrInfo *finfo, HeapTuple procedureTuple);
 static CFuncHashTabEntry *lookup_C_func(HeapTuple procedureTuple);
 static void record_C_func(HeapTuple procedureTuple,
-			  PGFunction user_fn, const Pg_finfo_record *inforec);
+						  PGFunction user_fn, const Pg_finfo_record *inforec);
 
 /* extern so it's callable via JIT */
 extern Datum fmgr_security_definer(PG_FUNCTION_ARGS);
@@ -217,7 +217,7 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 
 			/*
 			 * For an ordinary builtin function, we should never get here
-			 * because the isbuiltin() search above will have succeeded.
+			 * because the fmgr_isbuiltin() search above will have succeeded.
 			 * However, if the user has done a CREATE FUNCTION to create an
 			 * alias for a builtin function, we can end up here.  In that case
 			 * we have to look up the function by name.  The name of the
@@ -554,7 +554,7 @@ static void
 record_C_func(HeapTuple procedureTuple,
 			  PGFunction user_fn, const Pg_finfo_record *inforec)
 {
-	Oid			fn_oid =  ((Form_pg_proc) GETSTRUCT(procedureTuple))->oid;
+	Oid			fn_oid = ((Form_pg_proc) GETSTRUCT(procedureTuple))->oid;
 	CFuncHashTabEntry *entry;
 	bool		found;
 

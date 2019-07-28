@@ -34,37 +34,39 @@
 
 
 static void markTargetListOrigin(ParseState *pstate, TargetEntry *tle,
-					 Var *var, int levelsup);
+								 Var *var, int levelsup);
 static Node *transformAssignmentIndirection(ParseState *pstate,
-							   Node *basenode,
-							   const char *targetName,
-							   bool targetIsArray,
-							   Oid targetTypeId,
-							   int32 targetTypMod,
-							   Oid targetCollation,
-							   ListCell *indirection,
-							   Node *rhs,
-							   int location);
+											Node *basenode,
+											const char *targetName,
+											bool targetIsSubscripting,
+											Oid targetTypeId,
+											int32 targetTypMod,
+											Oid targetCollation,
+											List *indirection,
+											ListCell *indirection_cell,
+											Node *rhs,
+											int location);
 static Node *transformAssignmentSubscripts(ParseState *pstate,
-							  Node *basenode,
-							  const char *targetName,
-							  Oid targetTypeId,
-							  int32 targetTypMod,
-							  Oid targetCollation,
-							  List *subscripts,
-							  bool isSlice,
-							  ListCell *next_indirection,
-							  Node *rhs,
-							  int location);
+										   Node *basenode,
+										   const char *targetName,
+										   Oid targetTypeId,
+										   int32 targetTypMod,
+										   Oid targetCollation,
+										   List *subscripts,
+										   bool isSlice,
+										   List *indirection,
+										   ListCell *next_indirection,
+										   Node *rhs,
+										   int location);
 static List *ExpandColumnRefStar(ParseState *pstate, ColumnRef *cref,
-					bool make_target_entry);
+								 bool make_target_entry);
 static List *ExpandAllTables(ParseState *pstate, int location);
 static List *ExpandIndirectionStar(ParseState *pstate, A_Indirection *ind,
-					  bool make_target_entry, ParseExprKind exprKind);
+								   bool make_target_entry, ParseExprKind exprKind);
 static List *ExpandSingleTable(ParseState *pstate, RangeTblEntry *rte,
-				  int location, bool make_target_entry);
+							   int location, bool make_target_entry);
 static List *ExpandRowReference(ParseState *pstate, Node *expr,
-				   bool make_target_entry);
+								bool make_target_entry);
 static int	FigureColnameInternal(Node *node, char **name);
 
 
@@ -561,6 +563,7 @@ transformAssignedExpr(ParseState *pstate,
 										   attrtype,
 										   attrtypmod,
 										   attrcollation,
+										   indirection,
 										   list_head(indirection),
 										   (Node *) expr,
 										   location);
@@ -662,8 +665,9 @@ updateTargetListEntry(ParseState *pstate,
  * collation of the object to be assigned to (initially the target column,
  * later some subobject).
  *
- * indirection is the sublist remaining to process.  When it's NULL, we're
- * done recursing and can just coerce and return the RHS.
+ * indirection is the list of indirection nodes, and indirection_cell is the
+ * start of the sublist remaining to process.  When it's NULL, we're done
+ * recursing and can just coerce and return the RHS.
  *
  * rhs is the already-transformed value to be assigned; note it has not been
  * coerced to any particular type.
@@ -681,7 +685,8 @@ transformAssignmentIndirection(ParseState *pstate,
 							   Oid targetTypeId,
 							   int32 targetTypMod,
 							   Oid targetCollation,
-							   ListCell *indirection,
+							   List *indirection,
+							   ListCell *indirection_cell,
 							   Node *rhs,
 							   int location)
 {
@@ -690,14 +695,14 @@ transformAssignmentIndirection(ParseState *pstate,
 	bool		isSlice = false;
 	ListCell   *i;
 
-	if (indirection && !basenode)
+	if (indirection_cell && !basenode)
 	{
 		/*
 		 * Set up a substitution.  We abuse CaseTestExpr for this.  It's safe
 		 * to do so because the only nodes that will be above the CaseTestExpr
-		 * in the finished expression will be FieldStore and ArrayRef nodes.
-		 * (There could be other stuff in the tree, but it will be within
-		 * other child fields of those node types.)
+		 * in the finished expression will be FieldStore and SubscriptingRef
+		 * nodes. (There could be other stuff in the tree, but it will be
+		 * within other child fields of those node types.)
 		 */
 		CaseTestExpr *ctest = makeNode(CaseTestExpr);
 
@@ -712,7 +717,7 @@ transformAssignmentIndirection(ParseState *pstate,
 	 * subscripting.  Adjacent A_Indices nodes have to be treated as a single
 	 * multidimensional subscript operation.
 	 */
-	for_each_cell(i, indirection)
+	for_each_cell(i, indirection, indirection_cell)
 	{
 		Node	   *n = lfirst(i);
 
@@ -754,6 +759,7 @@ transformAssignmentIndirection(ParseState *pstate,
 													 targetCollation,
 													 subscripts,
 													 isSlice,
+													 indirection,
 													 i,
 													 rhs,
 													 location);
@@ -803,7 +809,8 @@ transformAssignmentIndirection(ParseState *pstate,
 												 fieldTypeId,
 												 fieldTypMod,
 												 fieldCollation,
-												 lnext(i),
+												 indirection,
+												 lnext(indirection, i),
 												 rhs,
 												 location);
 
@@ -840,6 +847,7 @@ transformAssignmentIndirection(ParseState *pstate,
 											 targetCollation,
 											 subscripts,
 											 isSlice,
+											 indirection,
 											 NULL,
 											 rhs,
 											 location);
@@ -892,6 +900,7 @@ transformAssignmentSubscripts(ParseState *pstate,
 							  Oid targetCollation,
 							  List *subscripts,
 							  bool isSlice,
+							  List *indirection,
 							  ListCell *next_indirection,
 							  Node *rhs,
 							  int location)
@@ -931,6 +940,7 @@ transformAssignmentSubscripts(ParseState *pstate,
 										 typeNeeded,
 										 containerTypMod,
 										 collationNeeded,
+										 indirection,
 										 next_indirection,
 										 rhs,
 										 location);

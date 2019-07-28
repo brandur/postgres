@@ -52,26 +52,26 @@ static int	_SPI_stack_depth = 0;	/* allocated size of _SPI_stack */
 static int	_SPI_connected = -1;	/* current stack index */
 
 static Portal SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
-						 ParamListInfo paramLI, bool read_only);
+									   ParamListInfo paramLI, bool read_only);
 
 static void _SPI_prepare_plan(const char *src, SPIPlanPtr plan);
 
 static void _SPI_prepare_oneshot_plan(const char *src, SPIPlanPtr plan);
 
-static int _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
-				  Snapshot snapshot, Snapshot crosscheck_snapshot,
-				  bool read_only, bool fire_triggers, uint64 tcount);
+static int	_SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
+							  Snapshot snapshot, Snapshot crosscheck_snapshot,
+							  bool read_only, bool fire_triggers, uint64 tcount);
 
 static ParamListInfo _SPI_convert_params(int nargs, Oid *argtypes,
-					Datum *Values, const char *Nulls);
+										 Datum *Values, const char *Nulls);
 
 static int	_SPI_pquery(QueryDesc *queryDesc, bool fire_triggers, uint64 tcount);
 
 static void _SPI_error_callback(void *arg);
 
 static void _SPI_cursor_operation(Portal portal,
-					  FetchDirection direction, long count,
-					  DestReceiver *dest);
+								  FetchDirection direction, long count,
+								  DestReceiver *dest);
 
 static SPIPlanPtr _SPI_make_plan_non_temp(SPIPlanPtr plan);
 static SPIPlanPtr _SPI_save_plan(SPIPlanPtr plan);
@@ -217,8 +217,8 @@ SPI_start_transaction(void)
 	MemoryContextSwitchTo(oldcontext);
 }
 
-void
-SPI_commit(void)
+static void
+_SPI_commit(bool chain)
 {
 	MemoryContext oldcontext = CurrentMemoryContext;
 
@@ -241,6 +241,14 @@ SPI_commit(void)
 				(errcode(ERRCODE_INVALID_TRANSACTION_TERMINATION),
 				 errmsg("cannot commit while a subtransaction is active")));
 
+	/*
+	 * Hold any pinned portals that any PLs might be using.  We have to do
+	 * this before changing transaction state, since this will run
+	 * user-defined code that might throw an error.
+	 */
+	HoldPinnedPortals();
+
+	/* Start the actual commit */
 	_SPI_current->internal_xact = true;
 
 	/*
@@ -250,14 +258,36 @@ SPI_commit(void)
 	while (ActiveSnapshotSet())
 		PopActiveSnapshot();
 
+	if (chain)
+		SaveTransactionCharacteristics();
+
 	CommitTransactionCommand();
+
+	if (chain)
+	{
+		StartTransactionCommand();
+		RestoreTransactionCharacteristics();
+	}
+
 	MemoryContextSwitchTo(oldcontext);
 
 	_SPI_current->internal_xact = false;
 }
 
 void
-SPI_rollback(void)
+SPI_commit(void)
+{
+	_SPI_commit(false);
+}
+
+void
+SPI_commit_and_chain(void)
+{
+	_SPI_commit(true);
+}
+
+static void
+_SPI_rollback(bool chain)
 {
 	MemoryContext oldcontext = CurrentMemoryContext;
 
@@ -272,12 +302,43 @@ SPI_rollback(void)
 				(errcode(ERRCODE_INVALID_TRANSACTION_TERMINATION),
 				 errmsg("cannot roll back while a subtransaction is active")));
 
+	/*
+	 * Hold any pinned portals that any PLs might be using.  We have to do
+	 * this before changing transaction state, since this will run
+	 * user-defined code that might throw an error, and in any case couldn't
+	 * be run in an already-aborted transaction.
+	 */
+	HoldPinnedPortals();
+
+	/* Start the actual rollback */
 	_SPI_current->internal_xact = true;
 
+	if (chain)
+		SaveTransactionCharacteristics();
+
 	AbortCurrentTransaction();
+
+	if (chain)
+	{
+		StartTransactionCommand();
+		RestoreTransactionCharacteristics();
+	}
+
 	MemoryContextSwitchTo(oldcontext);
 
 	_SPI_current->internal_xact = false;
+}
+
+void
+SPI_rollback(void)
+{
+	_SPI_rollback(false);
+}
+
+void
+SPI_rollback_and_chain(void)
+{
+	_SPI_rollback(true);
 }
 
 /*
@@ -1314,7 +1375,7 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 	 * throws an error.
 	 */
 	spierrcontext.callback = _SPI_error_callback;
-	spierrcontext.arg = (void *) plansource->query_string;
+	spierrcontext.arg = unconstify(char *, plansource->query_string);
 	spierrcontext.previous = error_context_stack;
 	error_context_stack = &spierrcontext;
 
@@ -1753,7 +1814,7 @@ SPI_plan_get_cached_plan(SPIPlanPtr plan)
 
 	/* Setup error traceback support for ereport() */
 	spierrcontext.callback = _SPI_error_callback;
-	spierrcontext.arg = (void *) plansource->query_string;
+	spierrcontext.arg = unconstify(char *, plansource->query_string);
 	spierrcontext.previous = error_context_stack;
 	error_context_stack = &spierrcontext;
 
@@ -1811,8 +1872,9 @@ spi_dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	slist_push_head(&_SPI_current->tuptables, &tuptable->next);
 
 	/* set up initial allocations */
-	tuptable->alloced = tuptable->free = 128;
+	tuptable->alloced = 128;
 	tuptable->vals = (HeapTuple *) palloc(tuptable->alloced * sizeof(HeapTuple));
+	tuptable->numvals = 0;
 	tuptable->tupdesc = CreateTupleDescCopy(typeinfo);
 
 	MemoryContextSwitchTo(oldcxt);
@@ -1838,18 +1900,18 @@ spi_printtup(TupleTableSlot *slot, DestReceiver *self)
 
 	oldcxt = MemoryContextSwitchTo(tuptable->tuptabcxt);
 
-	if (tuptable->free == 0)
+	if (tuptable->numvals >= tuptable->alloced)
 	{
 		/* Double the size of the pointer array */
-		tuptable->free = tuptable->alloced;
-		tuptable->alloced += tuptable->free;
+		uint64		newalloced = tuptable->alloced * 2;
+
 		tuptable->vals = (HeapTuple *) repalloc_huge(tuptable->vals,
-													 tuptable->alloced * sizeof(HeapTuple));
+													 newalloced * sizeof(HeapTuple));
+		tuptable->alloced = newalloced;
 	}
 
-	tuptable->vals[tuptable->alloced - tuptable->free] =
-		ExecCopySlotHeapTuple(slot);
-	(tuptable->free)--;
+	tuptable->vals[tuptable->numvals] = ExecCopySlotHeapTuple(slot);
+	(tuptable->numvals)++;
 
 	MemoryContextSwitchTo(oldcxt);
 
@@ -1884,7 +1946,7 @@ _SPI_prepare_plan(const char *src, SPIPlanPtr plan)
 	 * Setup error traceback support for ereport()
 	 */
 	spierrcontext.callback = _SPI_error_callback;
-	spierrcontext.arg = (void *) src;
+	spierrcontext.arg = unconstify(char *, src);
 	spierrcontext.previous = error_context_stack;
 	error_context_stack = &spierrcontext;
 
@@ -1989,7 +2051,7 @@ _SPI_prepare_oneshot_plan(const char *src, SPIPlanPtr plan)
 	 * Setup error traceback support for ereport()
 	 */
 	spierrcontext.callback = _SPI_error_callback;
-	spierrcontext.arg = (void *) src;
+	spierrcontext.arg = unconstify(char *, src);
 	spierrcontext.previous = error_context_stack;
 	error_context_stack = &spierrcontext;
 
@@ -2100,7 +2162,7 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 		List	   *stmt_list;
 		ListCell   *lc2;
 
-		spierrcontext.arg = (void *) plansource->query_string;
+		spierrcontext.arg = unconstify(char *, plansource->query_string);
 
 		/*
 		 * If this is a one-shot plan, we still need to do parse analysis.
@@ -2263,8 +2325,7 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 
 				/* Update "processed" if stmt returned tuples */
 				if (_SPI_current->tuptable)
-					_SPI_current->processed = _SPI_current->tuptable->alloced -
-						_SPI_current->tuptable->free;
+					_SPI_current->processed = _SPI_current->tuptable->numvals;
 
 				res = SPI_OK_UTILITY;
 
@@ -2308,7 +2369,7 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 			/*
 			 * The last canSetTag query sets the status values returned to the
 			 * caller.  Be careful to free any tuptables not returned, to
-			 * avoid intratransaction memory leak.
+			 * avoid intra-transaction memory leak.
 			 */
 			if (canSetTag)
 			{
@@ -2387,20 +2448,9 @@ _SPI_convert_params(int nargs, Oid *argtypes,
 
 	if (nargs > 0)
 	{
-		int			i;
+		paramLI = makeParamList(nargs);
 
-		paramLI = (ParamListInfo) palloc(offsetof(ParamListInfoData, params) +
-										 nargs * sizeof(ParamExternData));
-		/* we have static list of params, so no hooks needed */
-		paramLI->paramFetch = NULL;
-		paramLI->paramFetchArg = NULL;
-		paramLI->paramCompile = NULL;
-		paramLI->paramCompileArg = NULL;
-		paramLI->parserSetup = NULL;
-		paramLI->parserSetupArg = NULL;
-		paramLI->numParams = nargs;
-
-		for (i = 0; i < nargs; i++)
+		for (int i = 0; i < nargs; i++)
 		{
 			ParamExternData *prm = &paramLI->params[i];
 
@@ -2644,7 +2694,7 @@ _SPI_checktuples(void)
 
 	if (tuptable == NULL)		/* spi_dest_startup was not called */
 		failed = true;
-	else if (processed != (tuptable->alloced - tuptable->free))
+	else if (processed != tuptable->numvals)
 		failed = true;
 
 	return failed;

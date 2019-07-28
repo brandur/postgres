@@ -382,28 +382,28 @@ struct dsa_area
 	(segment_map_ptr - &area->segment_maps[0])
 
 static void init_span(dsa_area *area, dsa_pointer span_pointer,
-		  dsa_area_pool *pool, dsa_pointer start, size_t npages,
-		  uint16 size_class);
+					  dsa_area_pool *pool, dsa_pointer start, size_t npages,
+					  uint16 size_class);
 static bool transfer_first_span(dsa_area *area, dsa_area_pool *pool,
-					int fromclass, int toclass);
+								int fromclass, int toclass);
 static inline dsa_pointer alloc_object(dsa_area *area, int size_class);
 static bool ensure_active_superblock(dsa_area *area, dsa_area_pool *pool,
-						 int size_class);
+									 int size_class);
 static dsa_segment_map *get_segment_by_index(dsa_area *area,
-					 dsa_segment_index index);
+											 dsa_segment_index index);
 static void destroy_superblock(dsa_area *area, dsa_pointer span_pointer);
 static void unlink_span(dsa_area *area, dsa_area_span *span);
 static void add_span_to_fullness_class(dsa_area *area, dsa_area_span *span,
-						   dsa_pointer span_pointer, int fclass);
+									   dsa_pointer span_pointer, int fclass);
 static void unlink_segment(dsa_area *area, dsa_segment_map *segment_map);
 static dsa_segment_map *get_best_segment(dsa_area *area, size_t npages);
 static dsa_segment_map *make_new_segment(dsa_area *area, size_t requested_pages);
 static dsa_area *create_internal(void *place, size_t size,
-				int tranche_id,
-				dsm_handle control_handle,
-				dsm_segment *control_segment);
+								 int tranche_id,
+								 dsm_handle control_handle,
+								 dsm_segment *control_segment);
 static dsa_area *attach_internal(void *place, dsm_segment *segment,
-				dsa_handle handle);
+								 dsa_handle handle);
 static void check_for_freed_segments(dsa_area *area);
 static void check_for_freed_segments_locked(dsa_area *area);
 
@@ -693,7 +693,16 @@ dsa_allocate_extended(dsa_area *area, size_t size, int flags)
 		/* Obtain a span object. */
 		span_pointer = alloc_object(area, DSA_SCLASS_BLOCK_OF_SPANS);
 		if (!DsaPointerIsValid(span_pointer))
+		{
+			/* Raise error unless asked not to. */
+			if ((flags & DSA_ALLOC_NO_OOM) == 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("out of memory"),
+						 errdetail("Failed on DSA request of size %zu.",
+								   size)));
 			return InvalidDsaPointer;
+		}
 
 		LWLockAcquire(DSA_AREA_LOCK(area), LW_EXCLUSIVE);
 
@@ -790,12 +799,10 @@ dsa_allocate_extended(dsa_area *area, size_t size, int flags)
 	{
 		/* Raise error unless asked not to. */
 		if ((flags & DSA_ALLOC_NO_OOM) == 0)
-		{
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
 					 errmsg("out of memory"),
 					 errdetail("Failed on DSA request of size %zu.", size)));
-		}
 		return InvalidDsaPointer;
 	}
 
@@ -1669,13 +1676,15 @@ ensure_active_superblock(dsa_area *area, dsa_area_pool *pool,
 			return false;
 		}
 	}
+
+	/*
+	 * This shouldn't happen: get_best_segment() or make_new_segment()
+	 * promised that we can successfully allocate npages.
+	 */
 	if (!FreePageManagerGet(segment_map->fpm, npages, &first_page))
-	{
-		LWLockRelease(DSA_AREA_LOCK(area));
-		if (size_class != DSA_SCLASS_BLOCK_OF_SPANS)
-			dsa_free(area, span_pointer);
-		return false;
-	}
+		elog(FATAL,
+			 "dsa_allocate could not find %zu free pages for superblock",
+			 npages);
 	LWLockRelease(DSA_AREA_LOCK(area));
 
 	/* Compute the start of the superblock. */
@@ -2226,8 +2235,8 @@ check_for_freed_segments(dsa_area *area)
 
 	/*
 	 * Any other process that has freed a segment has incremented
-	 * free_segment_counter while holding an LWLock, and that must precede any
-	 * backend creating a new segment in the same slot while holding an
+	 * freed_segment_counter while holding an LWLock, and that must precede
+	 * any backend creating a new segment in the same slot while holding an
 	 * LWLock, and that must precede the creation of any dsa_pointer pointing
 	 * into the new segment which might reach us here, and the caller must
 	 * have sent the dsa_pointer to this process using appropriate memory
@@ -2249,7 +2258,7 @@ check_for_freed_segments(dsa_area *area)
 }
 
 /*
- * Workhorse for check_for_free_segments(), and also used directly in path
+ * Workhorse for check_for_freed_segments(), and also used directly in path
  * where the area lock is already held.  This should be called after acquiring
  * the lock but before looking up any segment by index number, to make sure we
  * unmap any stale segments that might have previously had the same index as a
@@ -2259,7 +2268,7 @@ static void
 check_for_freed_segments_locked(dsa_area *area)
 {
 	size_t		freed_segment_counter;
-	int		i;
+	int			i;
 
 	Assert(LWLockHeldByMe(DSA_AREA_LOCK(area)));
 	freed_segment_counter = area->control->freed_segment_counter;

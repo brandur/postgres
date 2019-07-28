@@ -57,35 +57,49 @@ typedef struct finalize_primnode_context
 	Bitmapset  *paramids;		/* Non-local PARAM_EXEC paramids found */
 } finalize_primnode_context;
 
+typedef struct inline_cte_walker_context
+{
+	const char *ctename;		/* name and relative level of target CTE */
+	int			levelsup;
+	int			refcount;		/* number of remaining references */
+	Query	   *ctequery;		/* query to substitute */
+} inline_cte_walker_context;
+
 
 static Node *build_subplan(PlannerInfo *root, Plan *plan, PlannerInfo *subroot,
-			  List *plan_params,
-			  SubLinkType subLinkType, int subLinkId,
-			  Node *testexpr, bool adjust_testexpr,
-			  bool unknownEqFalse);
+						   List *plan_params,
+						   SubLinkType subLinkType, int subLinkId,
+						   Node *testexpr, bool adjust_testexpr,
+						   bool unknownEqFalse);
 static List *generate_subquery_params(PlannerInfo *root, List *tlist,
-						 List **paramIds);
+									  List **paramIds);
 static List *generate_subquery_vars(PlannerInfo *root, List *tlist,
-					   Index varno);
+									Index varno);
 static Node *convert_testexpr(PlannerInfo *root,
-				 Node *testexpr,
-				 List *subst_nodes);
+							  Node *testexpr,
+							  List *subst_nodes);
 static Node *convert_testexpr_mutator(Node *node,
-						 convert_testexpr_context *context);
+									  convert_testexpr_context *context);
 static bool subplan_is_hashable(Plan *plan);
 static bool testexpr_is_hashable(Node *testexpr);
 static bool hash_ok_operator(OpExpr *expr);
+static bool contain_dml(Node *node);
+static bool contain_dml_walker(Node *node, void *context);
+static bool contain_outer_selfref(Node *node);
+static bool contain_outer_selfref_walker(Node *node, Index *depth);
+static void inline_cte(PlannerInfo *root, CommonTableExpr *cte);
+static bool inline_cte_walker(Node *node, inline_cte_walker_context *context);
 static bool simplify_EXISTS_query(PlannerInfo *root, Query *query);
 static Query *convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
-					  Node **testexpr, List **paramIds);
+									Node **testexpr, List **paramIds);
 static Node *replace_correlation_vars_mutator(Node *node, PlannerInfo *root);
 static Node *process_sublinks_mutator(Node *node,
-						 process_sublinks_context *context);
+									  process_sublinks_context *context);
 static Bitmapset *finalize_plan(PlannerInfo *root,
-			  Plan *plan,
-			  int gather_param,
-			  Bitmapset *valid_params,
-			  Bitmapset *scan_params);
+								Plan *plan,
+								int gather_param,
+								Bitmapset *valid_params,
+								Bitmapset *scan_params);
 static bool finalize_primnode(Node *node, finalize_primnode_context *context);
 static bool finalize_agg_primnode(Node *node, finalize_primnode_context *context);
 
@@ -553,7 +567,7 @@ build_subplan(PlannerInfo *root, Plan *plan, PlannerInfo *subroot,
 		{
 			ptr += sprintf(ptr, "$%d%s",
 						   lfirst_int(lc),
-						   lnext(lc) ? "," : ")");
+						   lnext(splan->setParam, lc) ? "," : ")");
 		}
 	}
 
@@ -804,10 +818,13 @@ hash_ok_operator(OpExpr *expr)
 /*
  * SS_process_ctes: process a query's WITH list
  *
- * We plan each interesting WITH item and convert it to an initplan.
+ * Consider each CTE in the WITH list and either ignore it (if it's an
+ * unreferenced SELECT), "inline" it to create a regular sub-SELECT-in-FROM,
+ * or convert it to an initplan.
+ *
  * A side effect is to fill in root->cte_plan_ids with a list that
  * parallels root->parse->cteList and provides the subplan ID for
- * each CTE's initplan.
+ * each CTE's initplan, or a dummy ID (-1) if we didn't make an initplan.
  */
 void
 SS_process_ctes(PlannerInfo *root)
@@ -833,6 +850,53 @@ SS_process_ctes(PlannerInfo *root)
 		 */
 		if (cte->cterefcount == 0 && cmdType == CMD_SELECT)
 		{
+			/* Make a dummy entry in cte_plan_ids */
+			root->cte_plan_ids = lappend_int(root->cte_plan_ids, -1);
+			continue;
+		}
+
+		/*
+		 * Consider inlining the CTE (creating RTE_SUBQUERY RTE(s)) instead of
+		 * implementing it as a separately-planned CTE.
+		 *
+		 * We cannot inline if any of these conditions hold:
+		 *
+		 * 1. The user said not to (the CTEMaterializeAlways option).
+		 *
+		 * 2. The CTE is recursive.
+		 *
+		 * 3. The CTE has side-effects; this includes either not being a plain
+		 * SELECT, or containing volatile functions.  Inlining might change
+		 * the side-effects, which would be bad.
+		 *
+		 * 4. The CTE is multiply-referenced and contains a self-reference to
+		 * a recursive CTE outside itself.  Inlining would result in multiple
+		 * recursive self-references, which we don't support.
+		 *
+		 * Otherwise, we have an option whether to inline or not.  That should
+		 * always be a win if there's just a single reference, but if the CTE
+		 * is multiply-referenced then it's unclear: inlining adds duplicate
+		 * computations, but the ability to absorb restrictions from the outer
+		 * query level could outweigh that.  We do not have nearly enough
+		 * information at this point to tell whether that's true, so we let
+		 * the user express a preference.  Our default behavior is to inline
+		 * only singly-referenced CTEs, but a CTE marked CTEMaterializeNever
+		 * will be inlined even if multiply referenced.
+		 *
+		 * Note: we check for volatile functions last, because that's more
+		 * expensive than the other tests needed.
+		 */
+		if ((cte->ctematerialized == CTEMaterializeNever ||
+			 (cte->ctematerialized == CTEMaterializeDefault &&
+			  cte->cterefcount == 1)) &&
+			!cte->cterecursive &&
+			cmdType == CMD_SELECT &&
+			!contain_dml(cte->ctequery) &&
+			(cte->cterefcount <= 1 ||
+			 !contain_outer_selfref(cte->ctequery)) &&
+			!contain_volatile_functions(cte->ctequery))
+		{
+			inline_cte(root, cte);
 			/* Make a dummy entry in cte_plan_ids */
 			root->cte_plan_ids = lappend_int(root->cte_plan_ids, -1);
 			continue;
@@ -933,6 +997,182 @@ SS_process_ctes(PlannerInfo *root)
 		cost_subplan(root, splan, plan);
 	}
 }
+
+/*
+ * contain_dml: is any subquery not a plain SELECT?
+ *
+ * We reject SELECT FOR UPDATE/SHARE as well as INSERT etc.
+ */
+static bool
+contain_dml(Node *node)
+{
+	return contain_dml_walker(node, NULL);
+}
+
+static bool
+contain_dml_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Query))
+	{
+		Query	   *query = (Query *) node;
+
+		if (query->commandType != CMD_SELECT ||
+			query->rowMarks != NIL)
+			return true;
+
+		return query_tree_walker(query, contain_dml_walker, context, 0);
+	}
+	return expression_tree_walker(node, contain_dml_walker, context);
+}
+
+/*
+ * contain_outer_selfref: is there an external recursive self-reference?
+ */
+static bool
+contain_outer_selfref(Node *node)
+{
+	Index		depth = 0;
+
+	/*
+	 * We should be starting with a Query, so that depth will be 1 while
+	 * examining its immediate contents.
+	 */
+	Assert(IsA(node, Query));
+
+	return contain_outer_selfref_walker(node, &depth);
+}
+
+static bool
+contain_outer_selfref_walker(Node *node, Index *depth)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, RangeTblEntry))
+	{
+		RangeTblEntry *rte = (RangeTblEntry *) node;
+
+		/*
+		 * Check for a self-reference to a CTE that's above the Query that our
+		 * search started at.
+		 */
+		if (rte->rtekind == RTE_CTE &&
+			rte->self_reference &&
+			rte->ctelevelsup >= *depth)
+			return true;
+		return false;			/* allow range_table_walker to continue */
+	}
+	if (IsA(node, Query))
+	{
+		/* Recurse into subquery, tracking nesting depth properly */
+		Query	   *query = (Query *) node;
+		bool		result;
+
+		(*depth)++;
+
+		result = query_tree_walker(query, contain_outer_selfref_walker,
+								   (void *) depth, QTW_EXAMINE_RTES_BEFORE);
+
+		(*depth)--;
+
+		return result;
+	}
+	return expression_tree_walker(node, contain_outer_selfref_walker,
+								  (void *) depth);
+}
+
+/*
+ * inline_cte: convert RTE_CTE references to given CTE into RTE_SUBQUERYs
+ */
+static void
+inline_cte(PlannerInfo *root, CommonTableExpr *cte)
+{
+	struct inline_cte_walker_context context;
+
+	context.ctename = cte->ctename;
+	/* Start at levelsup = -1 because we'll immediately increment it */
+	context.levelsup = -1;
+	context.refcount = cte->cterefcount;
+	context.ctequery = castNode(Query, cte->ctequery);
+
+	(void) inline_cte_walker((Node *) root->parse, &context);
+
+	/* Assert we replaced all references */
+	Assert(context.refcount == 0);
+}
+
+static bool
+inline_cte_walker(Node *node, inline_cte_walker_context *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Query))
+	{
+		Query	   *query = (Query *) node;
+
+		context->levelsup++;
+
+		/*
+		 * Visit the query's RTE nodes after their contents; otherwise
+		 * query_tree_walker would descend into the newly inlined CTE query,
+		 * which we don't want.
+		 */
+		(void) query_tree_walker(query, inline_cte_walker, context,
+								 QTW_EXAMINE_RTES_AFTER);
+
+		context->levelsup--;
+
+		return false;
+	}
+	else if (IsA(node, RangeTblEntry))
+	{
+		RangeTblEntry *rte = (RangeTblEntry *) node;
+
+		if (rte->rtekind == RTE_CTE &&
+			strcmp(rte->ctename, context->ctename) == 0 &&
+			rte->ctelevelsup == context->levelsup)
+		{
+			/*
+			 * Found a reference to replace.  Generate a copy of the CTE query
+			 * with appropriate level adjustment for outer references (e.g.,
+			 * to other CTEs).
+			 */
+			Query	   *newquery = copyObject(context->ctequery);
+
+			if (context->levelsup > 0)
+				IncrementVarSublevelsUp((Node *) newquery, context->levelsup, 1);
+
+			/*
+			 * Convert the RTE_CTE RTE into a RTE_SUBQUERY.
+			 *
+			 * Historically, a FOR UPDATE clause has been treated as extending
+			 * into views and subqueries, but not into CTEs.  We preserve this
+			 * distinction by not trying to push rowmarks into the new
+			 * subquery.
+			 */
+			rte->rtekind = RTE_SUBQUERY;
+			rte->subquery = newquery;
+			rte->security_barrier = false;
+
+			/* Zero out CTE-specific fields */
+			rte->ctename = NULL;
+			rte->ctelevelsup = 0;
+			rte->self_reference = false;
+			rte->coltypes = NIL;
+			rte->coltypmods = NIL;
+			rte->colcollations = NIL;
+
+			/* Count the number of replacements we've done */
+			context->refcount--;
+		}
+
+		return false;
+	}
+
+	return expression_tree_walker(node, inline_cte_walker, context);
+}
+
 
 /*
  * convert_ANY_sublink_to_join: try to convert an ANY SubLink to a join
@@ -1506,9 +1746,7 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 	 */
 	tlist = testlist = paramids = NIL;
 	resno = 1;
-	/* there's no "forfour" so we have to chase one of the lists manually */
-	cc = list_head(opcollations);
-	forthree(lc, leftargs, rc, rightargs, oc, opids)
+	forfour(lc, leftargs, rc, rightargs, oc, opids, cc, opcollations)
 	{
 		Node	   *leftarg = (Node *) lfirst(lc);
 		Node	   *rightarg = (Node *) lfirst(rc);
@@ -1516,7 +1754,6 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 		Oid			opcollation = lfirst_oid(cc);
 		Param	   *param;
 
-		cc = lnext(cc);
 		param = generate_new_exec_param(root,
 										exprType(rightarg),
 										exprTypmod(rightarg),

@@ -21,17 +21,6 @@
 	(OidIsValid(userid) ? GetUserNameFromId(userid, false) : "public")
 
 
-/*
- * Generic option types for validation.
- * NB! These are treated as flags, so use only powers of two here.
- */
-typedef enum
-{
-	ServerOpt = 1,				/* options applicable to SERVER */
-	UserMappingOpt = 2,			/* options for USER MAPPING */
-	FdwOpt = 4					/* options for FOREIGN DATA WRAPPER */
-} GenericOptionFlags;
-
 typedef struct ForeignDataWrapper
 {
 	Oid			fdwid;			/* FDW Oid */
@@ -77,14 +66,14 @@ typedef struct ForeignTable
 
 extern ForeignServer *GetForeignServer(Oid serverid);
 extern ForeignServer *GetForeignServerExtended(Oid serverid,
-						 bits16 flags);
+											   bits16 flags);
 extern ForeignServer *GetForeignServerByName(const char *name, bool missing_ok);
 extern UserMapping *GetUserMapping(Oid userid, Oid serverid);
 extern ForeignDataWrapper *GetForeignDataWrapper(Oid fdwid);
 extern ForeignDataWrapper *GetForeignDataWrapperExtended(Oid fdwid,
-							  bits16 flags);
+														 bits16 flags);
 extern ForeignDataWrapper *GetForeignDataWrapperByName(const char *name,
-							bool missing_ok);
+													   bool missing_ok);
 extern ForeignTable *GetForeignTable(Oid relid);
 
 extern List *GetForeignColumnOptions(Oid relid, AttrNumber attnum);
